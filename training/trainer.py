@@ -52,7 +52,7 @@ class Trainer:
             progress.set_description("Epoch: {}, Loss: {:.2f}, Prediction: {}, Labels: {}".format(
                 epoch, loss.item(), prediction, labels
             ))
-            self._writer.add_scalar("Loss", loss.item(), epoch + index * len(self._loader[Mode.train]))
+            self._writer.add_scalar("Loss", loss.item(), index + epoch * len(self._loader[Mode.train]))
 
     def validate(self, epoch):
         pass
