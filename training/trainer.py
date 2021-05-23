@@ -18,7 +18,8 @@ class Trainer:
             num_classes=self.config.num_classes,
             num_heads=self.config.num_heads,
             image_shape=self.config.image_shape,
-            patch_size=self.config.patch_size
+            patch_size=self.config.patch_size,
+            store_attention=False
         )
         self._optimizer = torch.optim.SGD(
             self._model.parameters(), lr=self.config.lr, momentum=0.9, nesterov=True, weight_decay=1e-4)
@@ -52,3 +53,8 @@ class Trainer:
 
     def validate(self, epoch):
         pass
+
+
+if __name__ == "__main__":
+    trainer = Trainer(ClassificationConfig())
+    trainer.train()

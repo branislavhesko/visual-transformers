@@ -44,7 +44,7 @@ class ResidualAdd(torch.nn.Module):
 
 
 class MultiHeadAttention(torch.nn.Module):
-    def __init__(self, embed_size, num_heads):
+    def __init__(self, embed_size, num_heads, attention_store=None):
         super().__init__()
         self.queries_projection = nn.Linear(embed_size, embed_size)
         self.values_projection = nn.Linear(embed_size, embed_size)
@@ -52,6 +52,7 @@ class MultiHeadAttention(torch.nn.Module):
         self.final_projection = nn.Linear(embed_size, embed_size)
         self.embed_size = embed_size
         self.num_heads = num_heads
+        self.attention_store = attention_store
 
     def forward(self, x):
         assert len(x.shape) == 3
@@ -61,10 +62,12 @@ class MultiHeadAttention(torch.nn.Module):
         keys = einops.rearrange(keys, "b n (h e) -> b n h e", h=self.num_heads)
         queries = einops.rearrange(queries, "b n (h e) -> b n h e", h=self.num_heads)
         values = einops.rearrange(values, "b n (h e) -> b n h e", h=self.num_heads)
-        energy_term = torch.einsum("bhqe, bhke -> bhqe", queries, keys)
+        energy_term = torch.einsum("bqhe, bkhe -> bqhk", queries, keys)
         divider = sqrt(self.embed_size)
         mh_out = torch.softmax(energy_term, -1)
-        out = torch.einsum('bhav, bhlv -> bhav ', mh_out / divider, values)
+        if self.attention_store is not None:
+            self.attention_store.append(mh_out.detach().cpu())
+        out = torch.einsum('bihv, bvhd -> bihd ', mh_out / divider, values)
         out = einops.rearrange(out, "b n h e -> b n (h e)")
         return self.final_projection(out)
 
@@ -79,12 +82,12 @@ class MLP(torch.nn.Sequential):
 
 
 class TransformerEncoderLayer(torch.nn.Sequential):
-    def __init__(self, embed_size=768, expansion=4, num_heads=8):
+    def __init__(self, embed_size=768, expansion=4, num_heads=8, attention_store=None):
         super(TransformerEncoderLayer, self).__init__(
             *[
                 ResidualAdd(nn.Sequential(*[
                     nn.LayerNorm(embed_size),
-                    MultiHeadAttention(embed_size, num_heads)
+                    MultiHeadAttention(embed_size, num_heads, attention_store=attention_store)
                 ])),
                 ResidualAdd(nn.Sequential(*[
                     nn.LayerNorm(embed_size),
@@ -111,12 +114,14 @@ class ClassificationHead(torch.nn.Sequential):
 
 
 class VIT(torch.nn.Module):
-    def __init__(self, in_channels, embed_size, num_classes, num_layers, num_heads, image_shape, patch_size):
+    def __init__(self, in_channels, embed_size, num_classes, num_layers,
+                 num_heads, image_shape, patch_size, store_attention):
         super().__init__()
+        self.attention_store = [] if store_attention else None
         self.patch_embed = PatchEmbedding(in_channels=in_channels, embed_size=embed_size)
         self.position_embed = PositionEmbedding(embed_size=embed_size, image_shape=image_shape, patch_size=patch_size)
         self.encoder = TransformerEncoder(num_layers=num_layers, embed_size=embed_size,
-                                          num_heads=num_heads)
+                                          num_heads=num_heads, attention_store=self.attention_store)
         self.classifier = ClassificationHead(embed_size=embed_size, num_classes=num_classes)
 
     def forward(self, x):
@@ -127,5 +132,6 @@ class VIT(torch.nn.Module):
 
 
 if __name__ == "__main__":
-    model = VIT(3, 768, 2, 6, 8, 224, 16)
-    print(model(torch.rand(2, 3, 224, 224)))
+    model = VIT(3, 768, 2, 6, 8, 224, 16, store_attention=False)
+    out = model(torch.rand(2, 3, 224, 224))
+    print(out)
