@@ -1,4 +1,5 @@
 import torch
+import torch.utils.tensorboard as tb
 import tqdm
 
 from config.classification_config import ClassificationConfig
@@ -26,6 +27,7 @@ class Trainer:
         self._scheduler = torch.optim.lr_scheduler.ExponentialLR(self._optimizer, gamma=0.9)
         self._loss = torch.nn.CrossEntropyLoss()
         self._loader = get_data_loaders(self.config)
+        self._writer = tb.SummaryWriter()
 
     def train(self):
 
@@ -50,6 +52,7 @@ class Trainer:
             progress.set_description("Epoch: {}, Loss: {:.2f}, Prediction: {}, Labels: {}".format(
                 epoch, loss.item(), prediction, labels
             ))
+            self._writer.add_scalar("Loss", loss.item(), epoch + index * len(self._loader[Mode.train]))
 
     def validate(self, epoch):
         pass
