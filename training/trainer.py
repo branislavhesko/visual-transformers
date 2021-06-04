@@ -5,6 +5,7 @@ import tqdm
 from config.classification_config import ClassificationConfig
 from config.data_mode import Mode
 from dataset.classification_dataset import get_data_loaders
+from vit import ViT
 from modeling.vit import VIT
 
 
@@ -21,7 +22,19 @@ class Trainer:
             image_shape=self.config.image_shape,
             patch_size=self.config.patch_size,
             store_attention=False
-        )
+        ).to(self.config.device)
+        # self._model = ViT(
+        #     image_size=256,
+        #     patch_size=32,
+        #     num_classes=4,
+        #     dim=1024,
+        #     depth=6,
+        #     heads=16,
+        #     mlp_dim=2048,
+        #     dropout=0.0,
+        #     emb_dropout=0.0
+        # ).to(self.config.device)
+        # self._model.load_state_dict(torch.load("./ckpt.pth"))
         self._optimizer = torch.optim.SGD(
             self._model.parameters(), lr=self.config.lr, momentum=0.9, nesterov=True, weight_decay=1e-4)
         self._scheduler = torch.optim.lr_scheduler.ExponentialLR(self._optimizer, gamma=0.9)
@@ -36,10 +49,12 @@ class Trainer:
 
             if epoch % self.config.validation_frequency == 0:
                 self.validate(epoch)
+            torch.save(self._model.state_dict(), "ckpt_mine.pth")
 
     def _train_single_epoch(self, epoch):
         progress = tqdm.tqdm(self._loader[Mode.train])
-
+        ok = 0
+        total = 0
         for index, data in enumerate(progress):
             self._optimizer.zero_grad()
             data = [d.to(self.config.device) for d in data]
@@ -49,10 +64,13 @@ class Trainer:
             loss.backward()
             self._optimizer.step()
             prediction = output.argmax(dim=-1)
-            progress.set_description("Epoch: {}, Loss: {:.2f}, Prediction: {}, Labels: {}".format(
-                epoch, loss.item(), prediction, labels
+            ok += (prediction == labels).sum()
+            total += len(prediction)
+            progress.set_description("Epoch: {}, Loss: {:.2f}, Prediction: {}, Labels: {}, OK: {}".format(
+                epoch, loss.item(), prediction, labels, (prediction == labels).sum()
             ))
             self._writer.add_scalar("Loss", loss.item(), index + epoch * len(self._loader[Mode.train]))
+        print("Accuracy: {}".format(ok / total))
 
     def validate(self, epoch):
         pass

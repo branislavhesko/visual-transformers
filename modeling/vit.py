@@ -118,7 +118,7 @@ class VIT(torch.nn.Module):
                  num_heads, image_shape, patch_size, store_attention):
         super().__init__()
         self.attention_store = [] if store_attention else None
-        self.patch_embed = PatchEmbedding(in_channels=in_channels, embed_size=embed_size)
+        self.patch_embed = PatchEmbedding(in_channels=in_channels, embed_size=embed_size, patch_size=patch_size     )
         self.position_embed = PositionEmbedding(embed_size=embed_size, image_shape=image_shape, patch_size=patch_size)
         self.encoder = TransformerEncoder(num_layers=num_layers, embed_size=embed_size,
                                           num_heads=num_heads, attention_store=self.attention_store)

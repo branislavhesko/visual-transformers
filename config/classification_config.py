@@ -7,19 +7,19 @@ from config.data_mode import Mode
 
 
 class ClassificationConfig:
-    num_heads = 8
+    num_heads = 16
     in_channels = 3
-    embed_size = 768
+    embed_size = 1024
     num_classes = 4
     num_layers = 6
     image_shape = 256
-    patch_size = 16
-    num_epochs = 1
-    lr = 1e-3
+    patch_size = 32
+    num_epochs = 11
+    lr = 5e-4
 
     validation_frequency = 2
-    batch_size = 4
-    num_workers = 0
+    batch_size = 16
+    num_workers = 8
     device = "cuda" if torch.cuda.is_available() and torch.cuda.get_device_properties(
         torch.cuda.current_device()).total_memory > 4e9 else "cpu"
     path = {
