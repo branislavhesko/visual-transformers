@@ -123,12 +123,17 @@ class VIT(torch.nn.Module):
         self.encoder = TransformerEncoder(num_layers=num_layers, embed_size=embed_size,
                                           num_heads=num_heads, attention_store=self.attention_store)
         self.classifier = ClassificationHead(embed_size=embed_size, num_classes=num_classes)
+        self.store_attention = store_attention
 
     def forward(self, x):
         patches = self.patch_embed(x)
         positions = self.position_embed(patches)
         encoder = self.encoder(positions)
         return self.classifier(encoder)
+
+    def reset(self):
+        if self.attention_store is not None and len(self.attention_store) > 0:
+            [self.attention_store.pop(0) for _ in range(len(self.attention_store))]
 
 
 if __name__ == "__main__":
