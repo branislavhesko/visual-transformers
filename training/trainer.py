@@ -37,7 +37,7 @@ class Trainer:
         # self._model.load_state_dict(torch.load("./ckpt.pth"))
         self._optimizer = torch.optim.SGD(
             self._model.parameters(), lr=self.config.lr, momentum=0.9, nesterov=True, weight_decay=1e-4)
-        self._scheduler = torch.optim.lr_scheduler.ExponentialLR(self._optimizer, gamma=0.9)
+        self._scheduler = torch.optim.lr_scheduler.ExponentialLR(self._optimizer, gamma=0.95)
         self._loss = torch.nn.CrossEntropyLoss()
         self._loader = get_data_loaders(self.config)
         self._writer = tb.SummaryWriter()
@@ -50,6 +50,7 @@ class Trainer:
             if epoch % self.config.validation_frequency == 0:
                 self.validate(epoch)
             torch.save(self._model.state_dict(), "ckpt_mine.pth")
+            self._scheduler.step()
 
     def _train_single_epoch(self, epoch):
         progress = tqdm.tqdm(self._loader[Mode.train])

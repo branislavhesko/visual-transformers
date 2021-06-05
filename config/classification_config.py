@@ -14,8 +14,8 @@ class ClassificationConfig:
     num_layers = 6
     image_shape = 256
     patch_size = 32
-    num_epochs = 11
-    lr = 5e-4
+    num_epochs = 21
+    lr = 5e-3
 
     validation_frequency = 2
     batch_size = 16
