@@ -6,6 +6,7 @@ import torch
 import torch.nn as nn
 
 
+# TODO: this may be refactored
 class PatchEmbedding(torch.nn.Module):
     def __init__(self, in_channels, embed_size, patch_size=16):
         super().__init__()

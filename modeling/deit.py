@@ -56,13 +56,15 @@ class ClassificationHead(torch.nn.Sequential):
 
 
 class DeIT(torch.nn.Module):
-    def __init__(self, in_channels, embed_size, num_classes, num_layers, num_heads, image_shape, patch_size):
+    def __init__(self, in_channels, embed_size, num_classes, num_layers, num_heads,
+                 image_shape, patch_size, store_attention=False):
         super().__init__()
         self.patch_embed = PatchEmbedding(in_channels=in_channels, embed_size=embed_size)
         self.position_embed = PositionEmbedding(embed_size=embed_size, image_shape=image_shape, patch_size=patch_size)
         self.encoder = TransformerEncoder(num_layers=num_layers, embed_size=embed_size,
                                           num_heads=num_heads)
         self.classifier = ClassificationHead(embed_size=embed_size, num_classes=num_classes)
+        self.store_attention = store_attention
 
     def forward(self, x):
         patches = self.patch_embed(x)
