@@ -6,7 +6,7 @@ import torchvision
 from config.data_mode import Mode
 
 
-class ClassificationConfig:
+class VITConfig:
     num_heads = 16
     in_channels = 3
     embed_size = 1024

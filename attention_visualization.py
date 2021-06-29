@@ -1,12 +1,12 @@
 import torch
 from matplotlib import pyplot as plt
 
-from config.classification_config import ClassificationConfig, Mode
+from config.vit_config import VITConfig, Mode
 from dataset.classification_dataset import get_data_loaders
 from modeling.vit import VIT
 from utils.visualization import get_attentions, visualize
 
-config = ClassificationConfig()
+config = VITConfig()
 model = VIT(
             num_layers=config.num_layers,
             in_channels=config.in_channels,

@@ -3,15 +3,16 @@ import torch.optim as optim
 import torch.utils.tensorboard as tb
 import tqdm
 
-from config.classification_config import ClassificationConfig
+from config.deit_config import DeITConfig
+from config.vit_config import VITConfig
 from config.data_mode import Mode
 from dataset.classification_dataset import get_data_loaders
-from modeling.deit import DeIT
+from modeling.deit import DeIT, get_auxiliary_model
 
 
 class DeItTrainer:
 
-    def __init__(self, config: ClassificationConfig):
+    def __init__(self, config: DeITConfig):
         self.config = config
         self._model = DeIT(
             num_layers=self.config.num_layers,
@@ -23,7 +24,7 @@ class DeItTrainer:
             patch_size=self.config.patch_size,
             store_attention=False
         ).to(self.config.device)
-        self._aux_model = None
+        self._aux_model = get_auxiliary_model(self.config.aux_model, self.config.checkpoint_path).to(self.config.device)
         self._loss = nn.CrossEntropyLoss()
         self._optimizer = optim.Adam(self._model.parameters(), lr=self.config.lr, weight_decay=1e-4)
         self._scheduler = optim.lr_scheduler.ExponentialLR(self._optimizer, gamma=0.95)
@@ -51,3 +52,10 @@ class DeItTrainer:
 
     def validate(self, epoch):
         pass
+
+    def _visualize_attentions(self):
+        pass
+
+
+if __name__ == "__main__":
+    DeItTrainer(DeITConfig()).train()

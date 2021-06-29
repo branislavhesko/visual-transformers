@@ -8,6 +8,11 @@ import torch.nn as nn
 from modeling.vit import TransformerEncoder
 
 
+def get_auxiliary_model(model_: nn.Module, path_to_ckpt: str):
+    model_.load_state_dict(torch.load(path_to_ckpt))
+    return model_
+
+
 class PatchEmbedding(torch.nn.Module):
     def __init__(self, in_channels, embed_size, patch_size=16):
         super().__init__()

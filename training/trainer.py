@@ -2,7 +2,7 @@ import torch
 import torch.utils.tensorboard as tb
 import tqdm
 
-from config.classification_config import ClassificationConfig
+from config.vit_config import VITConfig
 from config.data_mode import Mode
 from dataset.classification_dataset import get_data_loaders
 from vit import ViT
@@ -11,8 +11,8 @@ from modeling.vit import VIT
 
 class Trainer:
 
-    def __init__(self, config: ClassificationConfig):
-        self.config: ClassificationConfig = config
+    def __init__(self, config: VITConfig):
+        self.config: VITConfig = config
         self._model = VIT(
             num_layers=self.config.num_layers,
             in_channels=self.config.in_channels,
@@ -78,5 +78,5 @@ class Trainer:
 
 
 if __name__ == "__main__":
-    trainer = Trainer(ClassificationConfig())
+    trainer = Trainer(VITConfig())
     trainer.train()

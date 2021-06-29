@@ -1,11 +1,11 @@
 import torch.utils.data as data
 from torchvision.datasets import ImageFolder
 
-from config.classification_config import ClassificationConfig
+from config.vit_config import VITConfig
 from config.data_mode import Mode
 
 
-def get_data_loaders(config: ClassificationConfig):
+def get_data_loaders(config: VITConfig):
 
     dataset_train = ImageFolder(root=config.path[Mode.train],
                                 transform=config.transforms[Mode.train])
