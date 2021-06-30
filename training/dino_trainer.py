@@ -24,10 +24,11 @@ class DINOTrainer:
             self._train_one_epoch(epoch)
 
     def _single_step(self, images):
-        si1, si2 = [self.student(image) for image in images]
+        student_output = [self.student(image) for image in images]
         with torch.no_grad():
-            ti1, ti2 = [self.teacher(image) for image in images]
-        loss = (self.loss(si1, ti2) + self.loss(si2, ti1)) / 2.
+            teacher_output = [self.teacher(image) for image in images]
+        loss = self.loss(student_output=student_output, teacher_output=teacher_output)
+        apply_ema(self.teacher, self.student, decay=self.config.decay)
         loss.backward()
         self.optimizer.step()
 
