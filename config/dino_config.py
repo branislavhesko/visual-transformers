@@ -1,3 +1,6 @@
+from config.data_mode import Mode
+
+
 class DINOConfig:
     decay = 0.996
     num_epochs = 10
@@ -6,3 +9,10 @@ class DINOConfig:
     center_momentum = 1
     weights_momentum = 1
     temperature = 1
+    device = "cuda"
+    visualization_frequency = {
+        Mode.train: 100,
+        Mode.eval: 100
+    }
+    validation_frequency = 1
+    model_name = "DINO"

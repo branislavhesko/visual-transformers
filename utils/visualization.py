@@ -13,7 +13,7 @@ def get_attentions(model: VIT, image):
     return attention_mats
 
 
-#TODO: review
+# TODO: review
 def visualize(att_mat, im):
     att_mat = torch.stack(att_mat).squeeze(1)
 

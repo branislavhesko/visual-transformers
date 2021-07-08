@@ -10,7 +10,7 @@ from dataset.classification_dataset import get_data_loaders
 from modeling.deit import DeIT, get_auxiliary_model
 
 
-class DeItTrainer:
+class DEITTrainer:
 
     def __init__(self, config: DeITConfig):
         self.config = config
@@ -58,4 +58,4 @@ class DeItTrainer:
 
 
 if __name__ == "__main__":
-    DeItTrainer(DeITConfig()).train()
+    DEITTrainer(DeITConfig()).train()
