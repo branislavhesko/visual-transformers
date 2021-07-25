@@ -20,7 +20,7 @@ class MultiHeadXCITAttention(torch.nn.Module):
         self.embed_size = embed_size
         self.num_heads = num_heads
         self.attention_store = attention_store
-        self.tau = torch.nn.Parameter(1)
+        self.tau = torch.nn.Parameter(num_heads)
 
     def forward(self, x):
         assert len(x.shape) == 3
@@ -34,15 +34,40 @@ class MultiHeadXCITAttention(torch.nn.Module):
         queries = F.normalize(queries, p=2, dim=1)
         energy_term = torch.einsum("bnhe, bnhq -> behq", queries, keys)
         print(energy_term.shape)
-        divider = sqrt(self.embed_size)
         mh_out = torch.softmax(energy_term, -1)
         if self.attention_store is not None:
             self.attention_store.append(mh_out.detach().cpu())
-        out = torch.einsum('behq, bnhe -> bnhq ', mh_out / divider, values)
+        out = torch.einsum('behq, bnhe -> bnhq ', mh_out / self.tau, values)
         print(out.shape)
         out = einops.rearrange(out, "b n h e -> b n (h e)")
         return self.final_projection(out)
-    
+
+
+# TODO: add dropout
+class ClassAttentionLayer(nn.Module):
+
+    def __init__(self, embed_size, num_heads):
+        super().__init__()
+        self.embed_size = embed_size
+        self.num_heads = num_heads
+        self.divider = sqrt(self.embed_size // self.num_heads)
+        self.projection = nn.Linear(embed_size, embed_size * 3)
+        self.output_projection = nn.Linear(embed_size, embed_size)
+
+    def forward(self, x):
+        qkv = einops.rearrange(self.projection(x), "b n (a c) -> a b n c", a=3)
+        q, k, v = qkv[0, ...], qkv[1, ...], qkv[2, ...]
+        keys = einops.rearrange(k, "b n (h e) -> b n h e", h=self.num_heads)
+        queries = einops.rearrange(q, "b n (h e) -> b n h e", h=self.num_heads)
+        values = einops.rearrange(v, "b n (h e) -> b h n e", h=self.num_heads)
+        queries = queries[:, 0:1, :, :]
+        attention = (queries * keys).sum(-1) / self.divider
+        attention = einops.rearrange(attention.softmax(1), "b h n -> b n h")
+        attention = einops.rearrange(attention.unsqueeze(2) @ values, "b h t e -> b t (h e)")
+        token = self.output_projection(attention)
+        return torch.cat([token, x[:, 1:, :]], dim=1)
+
+
 
 class Conv3x3(nn.Sequential):
     
@@ -103,11 +128,23 @@ class MLP(torch.nn.Sequential):
 
 class DropPath(nn.Module):
     
-    def __init__(self):
+    def __init__(self, p=0.0):
         super().__init__()
+        assert 0. <=p <= 1.
+        self.p = p
+
+    def forward(self, input_vector):
+        if not self.training or self.p == 0.0:
+            return input_vector
+        drop_mask = (torch.rand(input_vector.shape) > self.p).long()
+        return torch.div(input_vector, 1. - self.p) * drop_mask
 
 
 class XCIT(nn.Module):
     
     def __init__(self):
         super(XCIT, self).__init__()
+
+
+if __name__ == "__main__":
+    ClassAttentionLayer(embed_size=768, num_heads=8)(torch.rand(2, 197, 768))
