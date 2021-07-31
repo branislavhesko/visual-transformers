@@ -1,13 +1,13 @@
 import itertools
 from math import sqrt
+from typing import List
+
 import einops
 from einops.layers.torch import Rearrange
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.nn.modules.activation import GELU
-from torch.nn.modules.batchnorm import BatchNorm2d
-from torch.nn.modules.conv import Conv2d
 
 
 class MultiHeadXCITAttention(torch.nn.Module):
@@ -20,7 +20,7 @@ class MultiHeadXCITAttention(torch.nn.Module):
         self.embed_size = embed_size
         self.num_heads = num_heads
         self.attention_store = attention_store
-        self.tau = torch.nn.Parameter(num_heads)
+        self.tau = torch.nn.Parameter(torch.ones(embed_size // num_heads))
 
     def forward(self, x):
         assert len(x.shape) == 3
@@ -44,7 +44,7 @@ class MultiHeadXCITAttention(torch.nn.Module):
 
 
 # TODO: add dropout
-class ClassAttentionLayer(nn.Module):
+class ClassAttention(nn.Module):
 
     def __init__(self, embed_size, num_heads):
         super().__init__()
@@ -67,6 +67,9 @@ class ClassAttentionLayer(nn.Module):
         token = self.output_projection(attention)
         return torch.cat([token, x[:, 1:, :]], dim=1)
 
+
+class ClassAttentionLayer(nn.Module):
+    pass
 
 
 class Conv3x3(nn.Sequential):
@@ -98,7 +101,7 @@ class ConvPatchEmbedding(nn.Module):
         return einops.rearrange(embed, "b c w h -> b (w h) c"), (w, h)
 
 
-class LPI(nn.Sequential):
+class LPI(nn.Module):
     
     def __init__(self, in_channels, kernel_size=3, padding=1):
         super().__init__()
@@ -112,9 +115,9 @@ class LPI(nn.Sequential):
         ])
     
     def forward(self, x, w, h):
-        x = einops.rearrange(x, "b n c -> b c h w", h=h, w=w)
+        x = einops.rearrange(x, "b (h w) c -> b c h w", h=h, w=w)
         lpi = self.lpi(x)
-        return einops.rearrange(lpi, "b c h w -> b n c")
+        return einops.rearrange(lpi, "b c h w -> b (h w) c")
 
 
 class MLP(torch.nn.Sequential):
@@ -140,6 +143,47 @@ class DropPath(nn.Module):
         return torch.div(input_vector, 1. - self.p) * drop_mask
 
 
+class ResidualAdd(nn.Module):
+    def __init__(self, block):
+        super(ResidualAdd, self).__init__()
+        self.block = block
+
+    def forward(self, x, *args, **kwargs):
+        return self.block(x, *args, **kwargs) + x
+
+
+class Sequential(nn.Module):
+
+    def __init__(self, blocks: List[nn.Module]):
+        super(Sequential, self).__init__()
+        self.blocks = blocks
+
+    def forward(self, x, *args, **kwargs):
+        for block in self.blocks:
+            x = block(x, *args, **kwargs)
+        return x
+
+
+class XCITLayer(nn.Module):
+    def __init__(self, embed_size, num_heads, kernel_size, padding):
+        super(XCITLayer, self).__init__()
+        self.lpi = LPI(in_channels=embed_size, kernel_size=kernel_size, padding=padding)
+        self.norm = nn.LayerNorm(embed_size)
+        self.mh = ResidualAdd(nn.Sequential(*[
+            nn.LayerNorm(embed_size),
+            MultiHeadXCITAttention(embed_size=embed_size, num_heads=num_heads)
+        ]))
+        self.mlp = ResidualAdd(nn.Sequential(*[
+            nn.LayerNorm(embed_size),
+            MLP(embed_size=embed_size)
+        ]))
+
+    def forward(self, x, w, h):
+        x = self.mh(x)
+        x = x + self.lpi(self.norm(x), w, h)
+        return self.mlp(x)
+
+
 class XCIT(nn.Module):
     
     def __init__(self):
@@ -147,4 +191,5 @@ class XCIT(nn.Module):
 
 
 if __name__ == "__main__":
-    ClassAttentionLayer(embed_size=768, num_heads=8)(torch.rand(2, 197, 768))
+    out = XCITLayer(embed_size=768, num_heads=8, kernel_size=3, padding=1)(torch.rand(4, 196, 768), 14, 14)
+    print(out.shape)
