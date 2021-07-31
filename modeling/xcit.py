@@ -69,7 +69,28 @@ class ClassAttention(nn.Module):
 
 
 class ClassAttentionLayer(nn.Module):
-    pass
+
+    def __init__(self, embed_size, num_heads, use_token_norm):
+        super(ClassAttentionLayer, self).__init__()
+        self.attention = ClassAttention(embed_size=embed_size, num_heads=num_heads)
+        self.use_token_norm = use_token_norm
+        self.mlp = MLP(embed_size=embed_size)
+        self.norm_attention = nn.LayerNorm(embed_size)
+        self.norm_mlp = nn.LayerNorm(embed_size)
+
+    def forward(self, x):
+        x = x + self.attention(self.norm_attention(x))
+
+        if self.use_token_norm:
+            x = self.norm_mlp(x)
+
+        else:
+            x[:, 0:1, :] = self.norm_mlp(x[:, 0:1, :])
+
+        cls_token = x[:, 0:1, :]
+        cls_token = cls_token + self.mlp(cls_token)
+        out_x = torch.cat([cls_token, x[:, 1:, :]], dim=1)
+        return x + out_x
 
 
 class Conv3x3(nn.Sequential):
