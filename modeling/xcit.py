@@ -169,11 +169,11 @@ class DropPath(nn.Module):
 
 class ResidualAdd(nn.Module):
     def __init__(self, block):
-        super(ResidualAdd, self).__init__()
+        super().__init__()
         self.block = block
 
-    def forward(self, x, *args, **kwargs):
-        return self.block(x, *args, **kwargs) + x
+    def forward(self, x):
+        return self.block(x) + x
 
 
 class Sequential(nn.Module):
@@ -214,19 +214,19 @@ class XCIT(nn.Module):
         super(XCIT, self).__init__()
         self._patch_embedding = ConvPatchEmbedding(stride=patch_size, embed_size=embed_size)
         self._pos_embedding = None if use_pos_encoding else nn.Identity()
-        self._blck_layers = [
+        self._blck_layers = nn.ModuleList([
             XCITLayer(
                 embed_size=embed_size,
                 num_heads=num_heads,
                 kernel_size=kernel_size,
                 padding=padding
-            ) for _ in range(num_xcit_layers)]
-        self._cls_layers = [
+            ) for _ in range(num_xcit_layers)])
+        self._cls_layers = nn.ModuleList([
             ClassAttentionLayer(
                 embed_size=embed_size,
                 num_heads=num_heads,
                 use_token_norm=use_token_norm
-            ) for _ in range(num_class_attention_layers)]
+            ) for _ in range(num_class_attention_layers)])
         self.head = nn.Linear(embed_size, num_classes)
         self._cls_token = torch.nn.Parameter(torch.ones(1, 1, embed_size))
         self._norm_final = nn.LayerNorm(embed_size)
@@ -247,5 +247,6 @@ class XCIT(nn.Module):
 
 
 if __name__ == "__main__":
-    out = XCIT(2, 6, 6, 16, 768, use_pos_encoding=False)(torch.rand(2, 3, 256, 256))
+    model = XCIT(2, 6, 6, 16, 768, use_pos_encoding=False).cuda()
+    out = model(torch.rand(2, 3, 256, 256).cuda())
     print(out.shape)
