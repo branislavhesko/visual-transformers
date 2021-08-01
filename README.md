@@ -1,2 +1,2 @@
 # DVIS
-Disease visualization using DINO + transformers
+This repository will contain multiple transformer architectures used for medical image classification. 

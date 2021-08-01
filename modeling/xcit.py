@@ -1,17 +1,15 @@
-import itertools
 from math import sqrt
-from typing import List
 
 import einops
-from einops.layers.torch import Rearrange
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from torch.nn.modules.activation import GELU
+
+from modeling.ops import PositionalEncodingFourier, DropPath
 
 
 class MultiHeadXCITAttention(torch.nn.Module):
-    def __init__(self, embed_size, num_heads, attention_store=None):
+    def __init__(self, embed_size, num_heads, attention_dropout_rate, projection_dropout_rate, attention_store=None):
         super().__init__()
         self.queries_projection = nn.Linear(embed_size, embed_size)
         self.values_projection = nn.Linear(embed_size, embed_size)
@@ -21,6 +19,8 @@ class MultiHeadXCITAttention(torch.nn.Module):
         self.num_heads = num_heads
         self.attention_store = attention_store
         self.tau = torch.nn.Parameter(torch.ones(embed_size // num_heads))
+        self.attention_dropout = nn.Dropout(attention_dropout_rate)
+        self.projection_dropout = nn.Dropout(projection_dropout_rate)
 
     def forward(self, x):
         assert len(x.shape) == 3
@@ -33,26 +33,26 @@ class MultiHeadXCITAttention(torch.nn.Module):
         keys = F.normalize(keys, p=2, dim=1)
         queries = F.normalize(queries, p=2, dim=1)
         energy_term = torch.einsum("bnhe, bnhq -> behq", queries, keys)
-        print(energy_term.shape)
         mh_out = torch.softmax(energy_term, -1)
+        mh_out = self.attention_dropout(mh_out)
         if self.attention_store is not None:
             self.attention_store.append(mh_out.detach().cpu())
         out = torch.einsum('behq, bnhe -> bnhq ', mh_out / self.tau, values)
-        print(out.shape)
         out = einops.rearrange(out, "b n h e -> b n (h e)")
-        return self.final_projection(out)
+        return self.projection_dropout(self.final_projection(out))
 
 
-# TODO: add dropout
 class ClassAttention(nn.Module):
 
-    def __init__(self, embed_size, num_heads):
+    def __init__(self, embed_size, num_heads, attention_dropout_rate, projection_dropout_rate):
         super().__init__()
         self.embed_size = embed_size
         self.num_heads = num_heads
         self.divider = sqrt(self.embed_size // self.num_heads)
         self.projection = nn.Linear(embed_size, embed_size * 3)
         self.output_projection = nn.Linear(embed_size, embed_size)
+        self.attention_dropout = nn.Dropout(attention_dropout_rate)
+        self.projection_dropout = nn.Dropout(projection_dropout_rate)
 
     def forward(self, x):
         qkv = einops.rearrange(self.projection(x), "b n (a c) -> a b n c", a=3)
@@ -63,23 +63,33 @@ class ClassAttention(nn.Module):
         queries = queries[:, 0:1, :, :]
         attention = (queries * keys).sum(-1) / self.divider
         attention = einops.rearrange(attention.softmax(1), "b h n -> b n h")
+        attention = self.attention_dropout(attention)
         attention = einops.rearrange(attention.unsqueeze(2) @ values, "b h t e -> b t (h e)")
         token = self.output_projection(attention)
+        self.projection_dropout(token)
         return torch.cat([token, x[:, 1:, :]], dim=1)
 
 
 class ClassAttentionLayer(nn.Module):
 
-    def __init__(self, embed_size, num_heads, use_token_norm):
+    def __init__(self, embed_size, num_heads, use_token_norm,
+                 attention_dropout_rate=0., projection_dropout_rate=0.,
+                 drop_path_rate=0.):
         super(ClassAttentionLayer, self).__init__()
-        self.attention = ClassAttention(embed_size=embed_size, num_heads=num_heads)
+        self.attention = ClassAttention(
+            embed_size=embed_size,
+            num_heads=num_heads,
+            attention_dropout_rate=attention_dropout_rate,
+            projection_dropout_rate=projection_dropout_rate
+        )
         self.use_token_norm = use_token_norm
         self.mlp = MLP(embed_size=embed_size)
         self.norm_attention = nn.LayerNorm(embed_size)
         self.norm_mlp = nn.LayerNorm(embed_size)
+        self.drop_path = DropPath(drop_path_rate)
 
     def forward(self, x):
-        x = x + self.attention(self.norm_attention(x))
+        x = x + self.drop_path(self.attention(self.norm_attention(x)))
 
         if self.use_token_norm:
             x = self.norm_mlp(x)
@@ -90,7 +100,7 @@ class ClassAttentionLayer(nn.Module):
         cls_token = x[:, 0:1, :]
         cls_token = cls_token + self.mlp(cls_token)
         out_x = torch.cat([cls_token, x[:, 1:, :]], dim=1)
-        return x + out_x
+        return x + self.drop_path(out_x)
 
 
 class Conv3x3(nn.Sequential):
@@ -108,7 +118,6 @@ class ConvPatchEmbedding(nn.Module):
         super().__init__()
         num_conv_layers = int(torch.log2(torch.tensor(stride)))
         self.patch_embedding = self._get_patch_embedding(num_conv_layers, stride, embed_dim=embed_size)
-        print(self)
 
     def _get_patch_embedding(self, num_conv_layers, stride, embed_dim):
         embedding = [Conv3x3(in_channels=3, out_channels=embed_dim // (stride // 2), stride=2), nn.GELU()]
@@ -151,81 +160,72 @@ class MLP(torch.nn.Sequential):
             nn.GELU(),
             nn.Linear(embed_size * expansion, embed_size)
         ])
-        
-
-class DropPath(nn.Module):
-    
-    def __init__(self, p=0.0):
-        super().__init__()
-        assert 0. <=p <= 1.
-        self.p = p
-
-    def forward(self, input_vector):
-        if not self.training or self.p == 0.0:
-            return input_vector
-        drop_mask = (torch.rand(input_vector.shape) > self.p).long()
-        return torch.div(input_vector, 1. - self.p) * drop_mask
 
 
 class ResidualAdd(nn.Module):
-    def __init__(self, block):
+    def __init__(self, block, drop_path_rate=0.):
         super().__init__()
         self.block = block
+        self.drop_path = DropPath(drop_path_rate)
 
     def forward(self, x):
-        return self.block(x) + x
-
-
-class Sequential(nn.Module):
-
-    def __init__(self, blocks: List[nn.Module]):
-        super(Sequential, self).__init__()
-        self.blocks = blocks
-
-    def forward(self, x, *args, **kwargs):
-        for block in self.blocks:
-            x = block(x, *args, **kwargs)
-        return x
+        return self.drop_path(self.block(x)) + x
 
 
 class XCITLayer(nn.Module):
-    def __init__(self, embed_size, num_heads, kernel_size, padding):
+    def __init__(self, embed_size, num_heads, kernel_size, padding,
+                 attention_dropout_rate=0., projection_dropout_rate=0., drop_path_rate=0.):
         super(XCITLayer, self).__init__()
         self.lpi = LPI(in_channels=embed_size, kernel_size=kernel_size, padding=padding)
         self.norm = nn.LayerNorm(embed_size)
         self.mh = ResidualAdd(nn.Sequential(*[
             nn.LayerNorm(embed_size),
-            MultiHeadXCITAttention(embed_size=embed_size, num_heads=num_heads)
+            MultiHeadXCITAttention(
+                embed_size=embed_size,
+                num_heads=num_heads,
+                attention_dropout_rate=attention_dropout_rate,
+                projection_dropout_rate=projection_dropout_rate
+            )
         ]))
         self.mlp = ResidualAdd(nn.Sequential(*[
             nn.LayerNorm(embed_size),
             MLP(embed_size=embed_size)
         ]))
+        self.drop_path = DropPath(drop_path_rate)
 
     def forward(self, x, w, h):
         x = self.mh(x)
-        x = x + self.lpi(self.norm(x), w, h)
+        x = x + self.drop_path(self.lpi(self.norm(x), w, h))
         return self.mlp(x)
 
 
 class XCIT(nn.Module):
     
-    def __init__(self, num_classes, num_class_attention_layers, num_xcit_layers, patch_size, embed_size=768, num_heads=8, use_dropout=False, use_token_norm=True, kernel_size=3, padding=1, use_pos_encoding=True):
+    def __init__(self, num_classes, num_class_attention_layers, num_xcit_layers, patch_size,
+                 embed_size=768, num_heads=8, attention_dropout_rate=0., projection_dropout_rate=0.,
+                 drop_path_rate=0., eta=0.,
+                 use_token_norm=True, kernel_size=3, padding=1, use_pos_encoding=True):
         super(XCIT, self).__init__()
         self._patch_embedding = ConvPatchEmbedding(stride=patch_size, embed_size=embed_size)
-        self._pos_embedding = None if use_pos_encoding else nn.Identity()
-        self._blck_layers = nn.ModuleList([
+        self._pos_embedding = PositionalEncodingFourier(dim=embed_size) if use_pos_encoding else None
+        self._xcit_layers = nn.ModuleList([
             XCITLayer(
                 embed_size=embed_size,
                 num_heads=num_heads,
                 kernel_size=kernel_size,
-                padding=padding
+                padding=padding,
+                attention_dropout_rate=attention_dropout_rate,
+                projection_dropout_rate=projection_dropout_rate,
+                drop_path_rate=drop_path_rate
             ) for _ in range(num_xcit_layers)])
-        self._cls_layers = nn.ModuleList([
+        self._class_layers = nn.ModuleList([
             ClassAttentionLayer(
                 embed_size=embed_size,
                 num_heads=num_heads,
-                use_token_norm=use_token_norm
+                use_token_norm=use_token_norm,
+                attention_dropout_rate=attention_dropout_rate,
+                projection_dropout_rate=projection_dropout_rate,
+                drop_path_rate=drop_path_rate
             ) for _ in range(num_class_attention_layers)])
         self.head = nn.Linear(embed_size, num_classes)
         self._cls_token = torch.nn.Parameter(torch.ones(1, 1, embed_size))
@@ -233,13 +233,19 @@ class XCIT(nn.Module):
 
     def forward(self, image):
         patches, w, h = self._patch_embedding(image)
-        feats = self._pos_embedding(patches)
-        for xcit in self._blck_layers:
-            feats = xcit(feats, w=w, h=h)
+        if self._pos_embedding is not None:
+            pos_embedding = self._pos_embedding(patches.shape[0], w, h)
+            pos_embedding = einops.rearrange(pos_embedding, "b e w h -> b (w h) e")
+        else:
+            pos_embedding = torch.zeros_like(patches, requires_grad=False)
+        feats = patches + pos_embedding
+
+        for xcit_layer in self._xcit_layers:
+            feats = xcit_layer(feats, w=w, h=h)
 
         tokenized = torch.cat([einops.repeat(self._cls_token, "b n e -> (repeat b) n e", repeat=feats.shape[0]), feats], dim=1)
 
-        for class_ in self._cls_layers:
+        for class_ in self._class_layers:
             tokenized = class_(tokenized)
 
         token = self._norm_final(tokenized)[:, :1, :]
@@ -247,6 +253,13 @@ class XCIT(nn.Module):
 
 
 if __name__ == "__main__":
-    model = XCIT(2, 6, 6, 16, 768, use_pos_encoding=False).cuda()
-    out = model(torch.rand(2, 3, 256, 256).cuda())
+    from time import time
+
+    model = XCIT(2, 6, 6, 16, 384, use_pos_encoding=True, attention_dropout_rate=0.1,
+                 projection_dropout_rate=0.1, drop_path_rate=0.5).cuda()
+    N = 100
+    start = time()
+    for idx in range(N):
+        out = model(torch.rand(2, 3, 768, 768).cuda())
+    print(f"FPS: {N / (time() - start)}, TIME_PER_ITER: {(time() - start) / N}")
     print(out.shape)
