@@ -103,23 +103,26 @@ class Conv3x3(nn.Sequential):
 
 
 class ConvPatchEmbedding(nn.Module):
-    
-    def __init__(self, stride=16, embed_dim=768):
+
+    def __init__(self, stride=16, embed_size=768):
         super().__init__()
         num_conv_layers = int(torch.log2(torch.tensor(stride)))
-        self.patch_embedding = self._get_patch_embedding(num_conv_layers, stride, embed_dim=embed_dim)
-        
+        self.patch_embedding = self._get_patch_embedding(num_conv_layers, stride, embed_dim=embed_size)
+        print(self)
+
     def _get_patch_embedding(self, num_conv_layers, stride, embed_dim):
-        embedding = [Conv3x3(in_channels=3, out_channels=embed_dim // (stride // 2), stride=2), GELU()]
-        for idx in range(1, num_conv_layers - 1):
-            embedding += [Conv3x3(in_channels=embed_dim // (2 ** idx), out_channels=embed_dim // (2 ** (idx + 1)), stride=2),  GELU()]
-        embedding += [Conv3x3(in_channels=embed_dim // 2, out_channels=embed_dim, stride=2), GELU()]
-        return nn.ModuleList(embedding)
-        
+        embedding = [Conv3x3(in_channels=3, out_channels=embed_dim // (stride // 2), stride=2), nn.GELU()]
+        for idx in range(num_conv_layers - 1, 1, -1):
+            embedding += [
+                Conv3x3(in_channels=embed_dim // (2 ** idx), out_channels=embed_dim // (2 ** (idx - 1)), stride=2),
+                nn.GELU()]
+        embedding += [Conv3x3(in_channels=embed_dim // 2, out_channels=embed_dim, stride=2)]
+        return nn.Sequential(*embedding)
+
     def forward(self, image):
         embed = self.patch_embedding(image)
         _, _, w, h = embed.shape
-        return einops.rearrange(embed, "b c w h -> b (w h) c"), (w, h)
+        return einops.rearrange(embed, "b c w h -> b (w h) c"), w, h
 
 
 class LPI(nn.Module):
@@ -207,10 +210,42 @@ class XCITLayer(nn.Module):
 
 class XCIT(nn.Module):
     
-    def __init__(self):
+    def __init__(self, num_classes, num_class_attention_layers, num_xcit_layers, patch_size, embed_size=768, num_heads=8, use_dropout=False, use_token_norm=True, kernel_size=3, padding=1, use_pos_encoding=True):
         super(XCIT, self).__init__()
+        self._patch_embedding = ConvPatchEmbedding(stride=patch_size, embed_size=embed_size)
+        self._pos_embedding = None if use_pos_encoding else nn.Identity()
+        self._blck_layers = [
+            XCITLayer(
+                embed_size=embed_size,
+                num_heads=num_heads,
+                kernel_size=kernel_size,
+                padding=padding
+            ) for _ in range(num_xcit_layers)]
+        self._cls_layers = [
+            ClassAttentionLayer(
+                embed_size=embed_size,
+                num_heads=num_heads,
+                use_token_norm=use_token_norm
+            ) for _ in range(num_class_attention_layers)]
+        self.head = nn.Linear(embed_size, num_classes)
+        self._cls_token = torch.nn.Parameter(torch.ones(1, 1, embed_size))
+        self._norm_final = nn.LayerNorm(embed_size)
+
+    def forward(self, image):
+        patches, w, h = self._patch_embedding(image)
+        feats = self._pos_embedding(patches)
+        for xcit in self._blck_layers:
+            feats = xcit(feats, w=w, h=h)
+
+        tokenized = torch.cat([einops.repeat(self._cls_token, "b n e -> (repeat b) n e", repeat=feats.shape[0]), feats], dim=1)
+
+        for class_ in self._cls_layers:
+            tokenized = class_(tokenized)
+
+        token = self._norm_final(tokenized)[:, :1, :]
+        return self.head(token)
 
 
 if __name__ == "__main__":
-    out = XCITLayer(embed_size=768, num_heads=8, kernel_size=3, padding=1)(torch.rand(4, 196, 768), 14, 14)
+    out = XCIT(2, 6, 6, 16, 768, use_pos_encoding=False)(torch.rand(2, 3, 256, 256))
     print(out.shape)
