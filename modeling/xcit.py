@@ -249,14 +249,14 @@ class XCIT(nn.Module):
             tokenized = class_(tokenized)
 
         token = self._norm_final(tokenized)[:, :1, :]
-        return self.head(token)
+        return self.head(token).squeeze()
 
 
 if __name__ == "__main__":
     from time import time
 
-    model = XCIT(2, 6, 6, 16, 384, use_pos_encoding=True, attention_dropout_rate=0.1,
-                 projection_dropout_rate=0.1, drop_path_rate=0.5).cuda()
+    model = XCIT(2, num_class_attention_layers=2, num_xcit_layers=6, num_heads=8, embed_size=384, use_pos_encoding=True, attention_dropout_rate=0.1,
+                 projection_dropout_rate=0.1, drop_path_rate=0.5, patch_size=16).cuda()
     N = 100
     start = time()
     for idx in range(N):

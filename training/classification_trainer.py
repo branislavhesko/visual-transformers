@@ -5,24 +5,35 @@ import tqdm
 from config.vit_config import VITConfig
 from config.data_mode import Mode
 from dataset.classification_dataset import get_data_loaders
-from vit import ViT
 from modeling.vit import VIT
+from modeling.xcit import XCIT
 
 
 class Trainer:
 
     def __init__(self, config: VITConfig):
         self.config: VITConfig = config
-        self._model = VIT(
-            num_layers=self.config.num_layers,
-            in_channels=self.config.in_channels,
-            embed_size=self.config.embed_size,
-            num_classes=self.config.num_classes,
-            num_heads=self.config.num_heads,
-            image_shape=self.config.image_shape,
-            patch_size=self.config.patch_size,
-            store_attention=False
-        ).to(self.config.device)
+        # self._model = VIT(
+        #     num_layers=self.config.num_layers,
+        #     in_channels=self.config.in_channels,
+        #     embed_size=self.config.embed_size,
+        #     num_classes=self.config.num_classes,
+        #     num_heads=self.config.num_heads,
+        #     image_shape=self.config.image_shape,
+        #     patch_size=self.config.patch_size,
+        #     store_attention=False
+        # ).to(self.config.device)
+        self._model = XCIT(
+            self.config.num_classes,
+            num_class_attention_layers=2,
+            num_xcit_layers=6,
+            num_heads=8,
+            embed_size=384,
+            use_pos_encoding=True,
+            attention_dropout_rate=0.1,
+            projection_dropout_rate=0.1,
+            drop_path_rate=0.5,
+            patch_size=16).cuda()
         # self._model = ViT(
         #     image_size=256,
         #     patch_size=32,

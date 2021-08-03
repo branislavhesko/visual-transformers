@@ -140,4 +140,4 @@ class VIT(torch.nn.Module):
 if __name__ == "__main__":
     model = VIT(3, 768, 2, 6, 8, 224, 16, store_attention=False)
     out = model(torch.rand(2, 3, 224, 224))
-    print(out)
+    print(out.shape)
