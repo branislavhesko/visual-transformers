@@ -84,13 +84,23 @@ class SwinMSA(nn.Module):
 
 class SwinBlock(nn.Module):
     
-    def __init__(self, shift_size, embed_dim, num_heads, shifted, attention_dropout=0.0, projection_dropout=0.0):
+    def __init__(self, shift_size, embed_dim, num_heads, image_resolution,
+                 shifted_block=False, attention_dropout=0.0, projection_dropout=0.0):
         super(SwinBlock, self).__init__()
-        attention_mask = None
+        self.resolution = image_resolution
+        self.embed_dim = embed_dim
+        self.num_heads = num_heads
+        attention_mask = self._get_attention_mask()
+        self.shifted = shifted_block
         self.shift_size = shift_size
-        self.attention = ResidualAdd(nn.Sequential(*[
-            nn.LayerNorm(embed_dim),
-            SwinMSA(embed_dim, num_heads, attention_mask=attention_mask)]))
+        self.attention_norm = nn.LayerNorm(embed_dim)
+        self.attention = SwinMSA(
+            embed_dim,
+            num_heads,
+            attention_mask=attention_mask,
+            attention_dropout=attention_dropout,
+            projection_dropout=projection_dropout
+        )
         self.mlp = ResidualAdd(nn.Sequential(*[nn.LayerNorm(embed_dim), MLP(embed_size=embed_dim)]))
 
     def cyclic_shift(self, tensor):
@@ -100,15 +110,39 @@ class SwinBlock(nn.Module):
         return torch.roll(tensor, (self.shift_size, self.shift_size), dims=(1, 2))
 
     def window_reverse(self, tensor, h , w):
-        image = einops.rearrange(tensor, "(b h w) (s s) c -> b c s h s w", s=self.shift_size, h=h, w=w)
+        image = einops.rearrange(tensor, "(b h w) (shift shift) c -> b c shift h shift w",
+                                 shift=self.shift_size, h=h, w=w)
         return einops.rearrange(image, "b c s h s w -> b c (s h) (s w)")
 
     def window_partition(self, tensor):
         windows = einops.rearrange(tensor, "b c (s h) (s w) -> b c s h s w", s=self.shift_size)
         return einops.rearrange(windows, "b c s h s w -> (b h w) (s s) c")
 
-    def forward(self, img):
-        pass
+    def forward(self, x):
+        """
+        Single swin block execution
+        Args:
+            img: (B (H W) C) tensor.
+
+        Returns:
+
+        """
+        b, n, c = x.shape
+        assert n == self.resolution[0] * self.resolution[1]
+        img = einops.rearrange(x, "b (h w) c ->  b h w c", h=self.resolution[0], w=self.resolution[1])
+        if self.shifted:
+            img = self.cyclic_shift(img)
+        norm1 = self.attention_norm(img)
+
+        partitions = self.window_partition(norm1)
+
+        attention = self.attention(partitions)
+        reverse_shifted = self.window_reverse(attention, *self.resolution)
+        if self.shifted:
+            reverse_shifted = self.reverse_cyclic_shift(reverse_shifted)
+        msa_out = einops.rearrange(reverse_shifted, "b h w c -> b (h w) c")
+        msa_out = x + msa_out
+        return msa_out + self.mlp(msa_out)
 
 
 class SwinTransformer(nn.Module):
