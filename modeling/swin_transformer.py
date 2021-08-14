@@ -83,7 +83,10 @@ class SwinMSA(nn.Module):
         energy_term *= self.scale
 
         if self.attention_mask is not None:
-            energy_term = energy_term + self.attention_mask
+            number_of_windows = self.attention_mask.shape[0]
+            energy_term = einops.rearrange(energy_term, "(b nw) h n n -> b nw h n n", nw=number_of_windows)
+            energy_term = energy_term + self.attention_mask.unsqueeze(1).unsqueeze(0)
+            energy_term = einops.rearrange(energy_term, "b nw h n n -> (b nw) h n n")
 
         energy_term = energy_term.softmax(dim=-1)
         out = torch.einsum('bihv, bvhd -> bihd ', energy_term, values)
@@ -95,17 +98,16 @@ class SwinMSA(nn.Module):
 
 class SwinBlock(nn.Module):
     
-    def __init__(self, shift_size, embed_dim, num_heads, image_resolution,
-                 shifted_block=False, attention_dropout=0.0, projection_dropout=0.0):
+    def __init__(self, window_size, embed_dim, num_heads, image_resolution, shift_size=0,
+                 attention_dropout=0.0, projection_dropout=0.0):
         super(SwinBlock, self).__init__()
+        self.window_size = window_size
         self.resolution = image_resolution
         self.embed_dim = embed_dim
         self.num_heads = num_heads
-        self.shifted = shifted_block
         self.shift_size = shift_size
         self.attention_norm = nn.LayerNorm(embed_dim)
         attention_mask = self._get_attention_mask()
-
         self.attention = SwinMSA(
             embed_dim,
             num_heads,
@@ -115,10 +117,26 @@ class SwinBlock(nn.Module):
         )
         self.mlp = ResidualAdd(nn.Sequential(*[nn.LayerNorm(embed_dim), MLP(embed_size=embed_dim)]))
         
-    def _get_attention_mask(self):
-        if self.shifted:
-            # TODO: fill
-            return torch.ones(1)
+    def _get_attention_mask(self, shift, window_size, h, w):
+        if self.shift_size > 0:
+            image_mask = torch.zeros((1, h, w, 1))
+            h_slices = (slice(0, -window_size),
+                slice(-window_size, -shift),
+                slice(-shift, None))
+            w_slices = (slice(0, -window_size),
+            slice(-window_size, -shift),
+            slice(-shift, None))
+            cnt = 0
+            for h in h_slices:
+                for w in w_slices:
+                    image_mask[:, h, w, :] = cnt
+                    cnt += 1
+            attention_mask = self.window_partition(image_mask)
+            attention_mask = einops.rearrange(attention_mask, "num_windows (window_size_y window_size_x) channels -> "
+                                              "(num_windows channels) (window_size_y window_size_x)")
+            attention_mask = attention_mask.unsqueeze(1) - attention_mask.unsqueeze(2)
+            attention_mask = attention_mask.masked_fill(attention_mask != 0, -100.).masked_fill(attention_mask == 0, 0.)
+            return attention_mask
         else:
             return None
 
@@ -130,12 +148,12 @@ class SwinBlock(nn.Module):
 
     def window_reverse(self, tensor, h , w):
         image = einops.rearrange(tensor, "(b h w) (shifty shiftx) c -> b shifty h shiftx w c",
-                                 shiftx=self.shift_size, shifty=self.shift_size, h=h//self.shift_size, w=w//self.shift_size)
+                                 shiftx=self.window_size, shifty=self.window_size, h=h//self.window_size, w=w//self.window_size)
         return einops.rearrange(image, "b sy h sx w c -> b (sy h) (sx w) c")
 
     def window_partition(self, tensor):
-        windows = einops.rearrange(tensor, "b (sy h) (sx w) c -> b sy h sx w c", sx=self.shift_size, sy=self.shift_size)
-        return einops.rearrange(windows, "b sy h sx w c -> (b h w) (sy sx) c")
+        windows = einops.rearrange(tensor, "b (wy h) (wx w) c -> b wy h wx w c", wx=self.window_size, wy=self.window_size)
+        return einops.rearrange(windows, "b wy h wx w c -> (b h w) (wy wx) c")
 
     def forward(self, x):
         """
