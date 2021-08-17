@@ -52,19 +52,35 @@ class ResidualAdd(torch.nn.Module):
 
 class SwinMSA(nn.Module):
     
-    def __init__(self, embed_dim, num_heads, attention_mask=None,
+    def __init__(self, embed_dim, num_heads, window_size, attention_mask=None,
                  attention_dropout=0.0, projection_dropout=0.0):
         super(SwinMSA, self).__init__()
         self.embed_dim = embed_dim
         self.num_heads = num_heads
+        self.window_size = window_size
         self.qkv = nn.Linear(embed_dim, 3 * embed_dim)
         self.projection = nn.Linear(embed_dim, embed_dim)
         self.scale = (self.embed_dim // self.num_heads) ** (-0.5)
 
         self.attention_dropout = nn.Dropout(attention_dropout)
         self.projection_dropout = nn.Dropout(projection_dropout)
-
+        self.relative_position_bias_table = torch.nn.Parameter(torch.zeros(
+            (2 * window_size[0] - 1) * (2 * window_size[1] - 1), num_heads)) # 2*Wh-1 * 2*Ww-1, nH
         self.register_buffer("attention_mask", attention_mask)
+        self.register_buffer("relative_bias_index", self._get_relative_bias_index(window_size=window_size))
+        
+    def _get_relative_bias_index(self, window_size):
+        coords_h = torch.arange(window_size[0])
+        coords_w = torch.arange(window_size[1])
+        coords = torch.stack(torch.meshgrid([coords_h, coords_w]))  # 2, Wh, Ww
+        coords_flatten = torch.flatten(coords, 1)  # 2, Wh*Ww
+        relative_coords_new = coords_flatten[:, :, None] - coords_flatten[:, None, :]  # 2, Wh*Ww, Wh*Ww
+        relative_coords = relative_coords_new.permute(1, 2, 0).contiguous()  # Wh*Ww, Wh*Ww, 2
+        relative_coords[:, :, 0] += window_size[0] - 1  # shift to start from 0
+        relative_coords[:, :, 1] += window_size[1] - 1
+        relative_coords[:, :, 0] *= 2 * window_size[1] - 1
+        relative_bias_index = relative_coords.sum(-1)  # Wh*Ww, Wh*Ww
+        return relative_bias_index
 
     def forward(self, x):
         """
@@ -81,13 +97,15 @@ class SwinMSA(nn.Module):
         queries, keys, values = qkv[0], qkv[1], qkv[2]
         energy_term = torch.einsum("bqhe, bkhe -> bqhk", queries, keys)
         energy_term *= self.scale
-
+        relative_position_bias = self.relative_position_bias_table[self.relative_bias_index.view(-1)].view(
+                    self.window_size[0] * self.window_size[1], self.window_size[0] * self.window_size[1], -1)  # Wh*Ww,Wh*Ww,nH
+        relative_position_bias = relative_position_bias.permute(2, 0, 1).contiguous()  # nH, Wh*Ww, Wh*Ww
+        energy_term = energy_term + relative_position_bias
         if self.attention_mask is not None:
             number_of_windows = self.attention_mask.shape[0]
             energy_term = einops.rearrange(energy_term, "(b nw) h n n -> b nw h n n", nw=number_of_windows)
             energy_term = energy_term + self.attention_mask.unsqueeze(1).unsqueeze(0)
             energy_term = einops.rearrange(energy_term, "b nw h n n -> (b nw) h n n")
-
         energy_term = energy_term.softmax(dim=-1)
         out = torch.einsum('bihv, bvhd -> bihd ', energy_term, values)
         print(out.shape)
