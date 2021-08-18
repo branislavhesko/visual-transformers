@@ -125,7 +125,7 @@ class SwinBlock(nn.Module):
         self.num_heads = num_heads
         self.shift_size = shift_size
         self.attention_norm = nn.LayerNorm(embed_dim)
-        attention_mask = self._get_attention_mask()
+        attention_mask = self._get_attention_mask(shift_size, window_size, image_resolution[1], image_resolution[0])
         self.attention = SwinMSA(
             embed_dim,
             num_heads,
