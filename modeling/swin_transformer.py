@@ -1,18 +1,7 @@
-from math import sqrt
-
 import torch
 import torch.nn as nn
 import einops
 from einops.layers.torch import Rearrange, Reduce
-
-
-class MLP(torch.nn.Sequential):
-    def __init__(self, embed_size=768, expansion=4):
-        super().__init__(*[
-            nn.Linear(embed_size, embed_size * expansion),
-            nn.GELU(),
-            nn.Linear(embed_size * expansion, embed_size)
-        ])
 
 
 class PositionalEncodingSinusoidal(torch.nn.Module):
@@ -20,7 +9,7 @@ class PositionalEncodingSinusoidal(torch.nn.Module):
 
 
 class PatchEmbeddingPixelwise(torch.nn.Sequential):
-    
+
     def __init__(self, stride, embedding_size, channels=3) -> None:
         reduce = Reduce("b c (w i) (h k) -> b (c i k) w h", "mean", i=stride, k=stride)
         rearange = Rearrange("b e h w -> b (h w) e")
@@ -48,10 +37,10 @@ class ResidualAdd(torch.nn.Module):
 
     def forward(self, x):
         return x + self.block(x)
-    
+
 
 class SwinMSA(nn.Module):
-    
+
     def __init__(self, embed_dim, num_heads, window_size, attention_mask=None,
                  attention_dropout=0.0, projection_dropout=0.0):
         super(SwinMSA, self).__init__()
@@ -65,11 +54,12 @@ class SwinMSA(nn.Module):
         self.attention_dropout = nn.Dropout(attention_dropout)
         self.projection_dropout = nn.Dropout(projection_dropout)
         self.relative_position_bias_table = torch.nn.Parameter(torch.zeros(
-            (2 * window_size[0] - 1) * (2 * window_size[1] - 1), num_heads)) # 2*Wh-1 * 2*Ww-1, nH
+            (2 * window_size[0] - 1) * (2 * window_size[1] - 1), num_heads))  # 2*Wh-1 * 2*Ww-1, nH
         self.register_buffer("attention_mask", attention_mask)
         self.register_buffer("relative_bias_index", self._get_relative_bias_index(window_size=window_size))
-        
-    def _get_relative_bias_index(self, window_size):
+
+    @staticmethod
+    def _get_relative_bias_index(window_size):
         coords_h = torch.arange(window_size[0])
         coords_w = torch.arange(window_size[1])
         coords = torch.stack(torch.meshgrid([coords_h, coords_w]))  # 2, Wh, Ww
@@ -98,7 +88,7 @@ class SwinMSA(nn.Module):
         energy_term = torch.einsum("bqhe, bkhe -> bqhk", queries, keys)
         energy_term *= self.scale
         relative_position_bias = self.relative_position_bias_table[self.relative_bias_index.view(-1)].view(
-                    self.window_size[0] * self.window_size[1], self.window_size[0] * self.window_size[1], -1)  # Wh*Ww,Wh*Ww,nH
+            self.window_size[0] * self.window_size[1], self.window_size[0] * self.window_size[1], -1)  # Wh*Ww,Wh*Ww,nH
         relative_position_bias = relative_position_bias.permute(2, 0, 1).contiguous()  # nH, Wh*Ww, Wh*Ww
         energy_term = energy_term + relative_position_bias
         if self.attention_mask is not None:
@@ -115,7 +105,7 @@ class SwinMSA(nn.Module):
 
 
 class SwinBlock(nn.Module):
-    
+
     def __init__(self, window_size, embed_dim, num_heads, image_resolution, shift_size=0,
                  attention_dropout=0.0, projection_dropout=0.0):
         super(SwinBlock, self).__init__()
@@ -129,21 +119,22 @@ class SwinBlock(nn.Module):
         self.attention = SwinMSA(
             embed_dim,
             num_heads,
+            window_size=window_size,
             attention_mask=attention_mask,
             attention_dropout=attention_dropout,
             projection_dropout=projection_dropout
         )
         self.mlp = ResidualAdd(nn.Sequential(*[nn.LayerNorm(embed_dim), MLP(embed_size=embed_dim)]))
-        
+
     def _get_attention_mask(self, shift, window_size, h, w):
         if self.shift_size > 0:
             image_mask = torch.zeros((1, h, w, 1))
             h_slices = (slice(0, -window_size),
-                slice(-window_size, -shift),
-                slice(-shift, None))
+                        slice(-window_size, -shift),
+                        slice(-shift, None))
             w_slices = (slice(0, -window_size),
-            slice(-window_size, -shift),
-            slice(-shift, None))
+                        slice(-window_size, -shift),
+                        slice(-shift, None))
             cnt = 0
             for h in h_slices:
                 for w in w_slices:
@@ -151,7 +142,7 @@ class SwinBlock(nn.Module):
                     cnt += 1
             attention_mask = self.window_partition(image_mask)
             attention_mask = einops.rearrange(attention_mask, "num_windows (window_size_y window_size_x) channels -> "
-                                              "(num_windows channels) (window_size_y window_size_x)")
+                                                              "(num_windows channels) (window_size_y window_size_x)")
             attention_mask = attention_mask.unsqueeze(1) - attention_mask.unsqueeze(2)
             attention_mask = attention_mask.masked_fill(attention_mask != 0, -100.).masked_fill(attention_mask == 0, 0.)
             return attention_mask
@@ -164,20 +155,22 @@ class SwinBlock(nn.Module):
     def reverse_cyclic_shift(self, tensor):
         return torch.roll(tensor, (self.shift_size, self.shift_size), dims=(1, 2))
 
-    def window_reverse(self, tensor, h , w):
+    def window_reverse(self, tensor, h, w):
         image = einops.rearrange(tensor, "(b h w) (shifty shiftx) c -> b shifty h shiftx w c",
-                                 shiftx=self.window_size, shifty=self.window_size, h=h//self.window_size, w=w//self.window_size)
+                                 shiftx=self.window_size, shifty=self.window_size,
+                                 h=h // self.window_size, w=w // self.window_size)
         return einops.rearrange(image, "b sy h sx w c -> b (sy h) (sx w) c")
 
     def window_partition(self, tensor):
-        windows = einops.rearrange(tensor, "b (wy h) (wx w) c -> b wy h wx w c", wx=self.window_size, wy=self.window_size)
+        windows = einops.rearrange(tensor, "b (wy h) (wx w) c -> b wy h wx w c",
+                                   wx=self.window_size, wy=self.window_size)
         return einops.rearrange(windows, "b wy h wx w c -> (b h w) (wy wx) c")
 
     def forward(self, x):
         """
         Single swin block execution
         Args:
-            img: (B (H W) C) tensor.
+            x: (B (H W) C) tensor.
 
         Returns:
 
@@ -200,7 +193,7 @@ class SwinBlock(nn.Module):
         msa_out = x + msa_out
         print(msa_out.shape)
         return msa_out + self.mlp(msa_out)
-    
+
 
 class SwinTransformer(nn.Module):
     pass
