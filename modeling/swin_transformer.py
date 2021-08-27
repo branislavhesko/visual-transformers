@@ -54,21 +54,21 @@ class SwinMSA(nn.Module):
         self.attention_dropout = nn.Dropout(attention_dropout)
         self.projection_dropout = nn.Dropout(projection_dropout)
         self.relative_position_bias_table = torch.nn.Parameter(torch.zeros(
-            (2 * window_size[0] - 1) * (2 * window_size[1] - 1), num_heads))  # 2*Wh-1 * 2*Ww-1, nH
+            (2 * window_size - 1) * (2 * window_size - 1), num_heads))  # 2*Wh-1 * 2*Ww-1, nH
         self.register_buffer("attention_mask", attention_mask)
         self.register_buffer("relative_bias_index", self._get_relative_bias_index(window_size=window_size))
 
     @staticmethod
     def _get_relative_bias_index(window_size):
-        coords_h = torch.arange(window_size[0])
-        coords_w = torch.arange(window_size[1])
+        coords_h = torch.arange(window_size)
+        coords_w = torch.arange(window_size)
         coords = torch.stack(torch.meshgrid([coords_h, coords_w]))  # 2, Wh, Ww
         coords_flatten = torch.flatten(coords, 1)  # 2, Wh*Ww
         relative_coords_new = coords_flatten[:, :, None] - coords_flatten[:, None, :]  # 2, Wh*Ww, Wh*Ww
         relative_coords = relative_coords_new.permute(1, 2, 0).contiguous()  # Wh*Ww, Wh*Ww, 2
-        relative_coords[:, :, 0] += window_size[0] - 1  # shift to start from 0
-        relative_coords[:, :, 1] += window_size[1] - 1
-        relative_coords[:, :, 0] *= 2 * window_size[1] - 1
+        relative_coords[:, :, 0] += window_size - 1  # shift to start from 0
+        relative_coords[:, :, 1] += window_size - 1
+        relative_coords[:, :, 0] *= 2 * window_size - 1
         relative_bias_index = relative_coords.sum(-1)  # Wh*Ww, Wh*Ww
         return relative_bias_index
 
@@ -88,14 +88,14 @@ class SwinMSA(nn.Module):
         energy_term = torch.einsum("bqhe, bkhe -> bqhk", queries, keys)
         energy_term *= self.scale
         relative_position_bias = self.relative_position_bias_table[self.relative_bias_index.view(-1)].view(
-            self.window_size[0] * self.window_size[1], self.window_size[0] * self.window_size[1], -1)  # Wh*Ww,Wh*Ww,nH
-        relative_position_bias = relative_position_bias.permute(2, 0, 1).contiguous()  # nH, Wh*Ww, Wh*Ww
+            self.window_size * self.window_size, self.window_size * self.window_size, -1)  # Wh*Ww,Wh*Ww,nH
+        relative_position_bias = relative_position_bias.permute(0, 2, 1).contiguous()  # nH, Wh*Ww, Wh*Ww
         energy_term = energy_term + relative_position_bias
         if self.attention_mask is not None:
             number_of_windows = self.attention_mask.shape[0]
-            energy_term = einops.rearrange(energy_term, "(b nw) h n n -> b nw h n n", nw=number_of_windows)
-            energy_term = energy_term + self.attention_mask.unsqueeze(1).unsqueeze(0)
-            energy_term = einops.rearrange(energy_term, "b nw h n n -> (b nw) h n n")
+            energy_term = einops.rearrange(energy_term, "(b nw) h width height -> b nw h width height", nw=number_of_windows)
+            energy_term = energy_term + self.attention_mask.unsqueeze(2).unsqueeze(0)
+            energy_term = einops.rearrange(energy_term, "b nw h width height -> (b nw) h width height")
         energy_term = energy_term.softmax(dim=-1)
         out = torch.einsum('bihv, bvhd -> bihd ', energy_term, values)
         print(out.shape)
@@ -142,7 +142,9 @@ class SwinBlock(nn.Module):
                     cnt += 1
             attention_mask = self.window_partition(image_mask)
             attention_mask = einops.rearrange(attention_mask, "num_windows (window_size_y window_size_x) channels -> "
-                                                              "(num_windows channels) (window_size_y window_size_x)")
+                                                              "(num_windows channels) (window_size_y window_size_x)",
+                                                              window_size_y=window_size,
+                                                              window_size_x=window_size)
             attention_mask = attention_mask.unsqueeze(1) - attention_mask.unsqueeze(2)
             attention_mask = attention_mask.masked_fill(attention_mask != 0, -100.).masked_fill(attention_mask == 0, 0.)
             return attention_mask
@@ -178,22 +180,86 @@ class SwinBlock(nn.Module):
         b, n, c = x.shape
         assert n == self.resolution[0] * self.resolution[1]
         img = einops.rearrange(x, "b (h w) c ->  b h w c", h=self.resolution[0], w=self.resolution[1])
-        if self.shifted:
+        if self.shift_size:
             img = self.cyclic_shift(img)
-        print(img.shape)
         norm1 = self.attention_norm(img)
-        print(norm1.shape)
         partitions = self.window_partition(norm1)
-        print(partitions.shape)
         attention = self.attention(partitions)
         reverse_shifted = self.window_reverse(attention, *self.resolution)
-        if self.shifted:
+        if self.shift_size:
             reverse_shifted = self.reverse_cyclic_shift(reverse_shifted)
         msa_out = einops.rearrange(reverse_shifted, "b h w c -> b (h w) c")
         msa_out = x + msa_out
-        print(msa_out.shape)
         return msa_out + self.mlp(msa_out)
+
+class PatchMergingLayer(nn.Module):
+
+    def __init__(self, in_channels, out_channels, image_resolution, dropout_rate=0.1):
+        super().__init__()
+        self.merging_dropout = nn.Dropout(dropout_rate)
+        self.linear = nn.Linear(in_channels * 4, out_channels)
+        self.norm = nn.LayerNorm(out_channels)
+        self.image_resolution = image_resolution
+
+
+    def forward(self, x):
+        h, w = self.image_resolution
+        x = einops.rearrange(x, "b (h w) c -> b h w c", h=h, w=w)
+        top_left_corner = x[:, 0::2, 0::2, :]
+        top_right_corner = x[:, 1::2, 0::2, :]
+        bottom_right_corner = x[:, 1::2, 1::2, :]
+        bottom_left_corner = x[:, 0::2, 1::2, :]
+        features = torch.cat([
+            top_left_corner,
+            top_right_corner,
+            bottom_left_corner,
+            bottom_right_corner
+            ], dim=-1)
+        return einops.rearrange(
+            self.merging_dropout(self.norm(self.linear(features))),
+            "b h w c -> b (h w) c"
+            )
+
+
+class TransformerBlock(nn.Sequential):
+
+    def __init__(self, window_size, embed_dim, num_heads, image_resolution, shift_size,
+                 in_channels, out_channels,
+                 attention_dropout=0.0, projection_dropout=0.0, dropout_rate_patch_merge=0.0):
+        super().__init__(*[
+            PatchMergingLayer(
+                in_channels,
+                out_channels,
+                image_resolution,
+                dropout_rate=dropout_rate_patch_merge
+                ),
+            SwinBlock(
+                window_size,
+                embed_dim,
+                num_heads,
+                (image_resolution[0] // 2, image_resolution[1] // 2),
+                0,
+                attention_dropout,
+                projection_dropout
+                ),
+            SwinBlock(
+                window_size,
+                embed_dim,
+                num_heads,
+                (image_resolution[0] // 2, image_resolution[1] // 2),
+                shift_size,
+                attention_dropout,
+                projection_dropout
+                ),
+        ])
+
 
 
 class SwinTransformer(nn.Module):
     pass
+
+
+if __name__ == "__main__":
+    block = TransformerBlock(window_size=7, embed_dim=768, num_heads=8, image_resolution=(28, 28), shift_size=3, in_channels=384, out_channels=768)
+    out = block(torch.rand(1, (28 * 28), 384))
+    print(out.shape)
