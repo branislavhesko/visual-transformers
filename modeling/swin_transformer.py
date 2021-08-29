@@ -104,11 +104,11 @@ class SwinMSA(nn.Module):
         return self.projection_dropout(out)
 
 
-class SwinBlock(nn.Module):
+class SingleSwinBlock(nn.Module):
 
     def __init__(self, window_size, embed_dim, num_heads, image_resolution, shift_size=0,
                  attention_dropout=0.0, projection_dropout=0.0):
-        super(SwinBlock, self).__init__()
+        super(SingleSwinBlock, self).__init__()
         self.window_size = window_size
         self.resolution = image_resolution
         self.embed_dim = embed_dim
@@ -221,19 +221,12 @@ class PatchMergingLayer(nn.Module):
             )
 
 
-class TransformerBlock(nn.Sequential):
-
+class SwinTransformerBlock(nn.Sequential):
     def __init__(self, window_size, embed_dim, num_heads, image_resolution, shift_size,
                  in_channels, out_channels,
                  attention_dropout=0.0, projection_dropout=0.0, dropout_rate_patch_merge=0.0):
         super().__init__(*[
-            PatchMergingLayer(
-                in_channels,
-                out_channels,
-                image_resolution,
-                dropout_rate=dropout_rate_patch_merge
-                ),
-            SwinBlock(
+            SingleSwinBlock(
                 window_size,
                 embed_dim,
                 num_heads,
@@ -242,7 +235,7 @@ class TransformerBlock(nn.Sequential):
                 attention_dropout,
                 projection_dropout
                 ),
-            SwinBlock(
+            SingleSwinBlock(
                 window_size,
                 embed_dim,
                 num_heads,
@@ -254,12 +247,39 @@ class TransformerBlock(nn.Sequential):
         ])
 
 
+class TransformerBlock(nn.Sequential):
+
+    def __init__(self, num_blocks, window_size, embed_dim, num_heads, image_resolution, shift_size,
+                 in_channels, out_channels,
+                 attention_dropout=0.0, projection_dropout=0.0, dropout_rate_patch_merge=0.0):
+
+        swin_transformer_blocks = [SwinTransformerBlock(
+            window_size,
+            embed_dim,
+            num_heads,
+            image_resolution,
+            shift_size,
+            in_channels,
+            out_channels,
+            attention_dropout,
+            projection_dropout,
+            dropout_rate_patch_merge
+            ) for _ in range(num_blocks)]
+        blocks = [PatchMergingLayer(
+                      in_channels,
+                      out_channels,
+                      image_resolution,
+                      dropout_rate=dropout_rate_patch_merge
+                ),] + swin_transformer_blocks
+        super().__init__(*blocks)
+
+
 
 class SwinTransformer(nn.Module):
     pass
 
 
 if __name__ == "__main__":
-    block = TransformerBlock(window_size=7, embed_dim=768, num_heads=8, image_resolution=(28, 28), shift_size=3, in_channels=384, out_channels=768)
+    block = TransformerBlock(num_blocks=6, window_size=7, embed_dim=768, num_heads=8, image_resolution=(28, 28), shift_size=3, in_channels=384, out_channels=768)
     out = block(torch.rand(1, (28 * 28), 384))
     print(out.shape)
