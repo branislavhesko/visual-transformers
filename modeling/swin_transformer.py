@@ -223,8 +223,7 @@ class PatchMergingLayer(nn.Module):
 
 class SwinTransformerBlock(nn.Sequential):
     def __init__(self, window_size, embed_dim, num_heads, image_resolution, shift_size,
-                 in_channels, out_channels,
-                 attention_dropout=0.0, projection_dropout=0.0, dropout_rate_patch_merge=0.0):
+                 attention_dropout=0.0, projection_dropout=0.0):
         super().__init__(*[
             SingleSwinBlock(
                 window_size,
@@ -250,7 +249,7 @@ class SwinTransformerBlock(nn.Sequential):
 class TransformerBlock(nn.Sequential):
 
     def __init__(self, num_blocks, window_size, embed_dim, num_heads, image_resolution, shift_size,
-                 in_channels, out_channels,
+                 in_channels,
                  attention_dropout=0.0, projection_dropout=0.0, dropout_rate_patch_merge=0.0):
 
         swin_transformer_blocks = [SwinTransformerBlock(
@@ -259,27 +258,84 @@ class TransformerBlock(nn.Sequential):
             num_heads,
             image_resolution,
             shift_size,
-            in_channels,
-            out_channels,
             attention_dropout,
             projection_dropout,
-            dropout_rate_patch_merge
             ) for _ in range(num_blocks)]
+        # TODO: this is not desired for the first block!
         blocks = [PatchMergingLayer(
                       in_channels,
-                      out_channels,
+                      embed_dim,
                       image_resolution,
                       dropout_rate=dropout_rate_patch_merge
                 ),] + swin_transformer_blocks
         super().__init__(*blocks)
 
 
-
 class SwinTransformer(nn.Module):
-    pass
+
+    def __init__(
+            self,
+            window_size,
+            img_shape,
+            shift_size,
+            embed_dim,
+            num_heads,
+            use_linear_pos_encoding=False
+            ):
+        super().__init__()
+        self.patch_init = PatchEmbeddingPixelwise(stride=4, embedding_size=embed_dim, channels=3)
+        self._use_lpe = use_linear_pos_encoding
+        new_shape = self._get_new_shape(img_shape, 4)
+        num_elements = new_shape[0] * new_shape[1]
+
+        if self._use_lpe:
+            self.pos_encoding = torch.nn.Parameter(torch.zeros(1, num_elements, embed_dim))
+        self.layer1 = TransformerBlock(
+            num_blocks=2,
+            image_resolution=new_shape,
+            embed_dim=embed_dim * 2,
+            num_heads=num_heads,
+            window_size=window_size,
+            shift_size=shift_size,
+            in_channels=embed_dim
+            )
+        self.layer2 = TransformerBlock(
+            num_blocks=2,
+            image_resolution=self._get_new_shape(new_shape, stride=2),
+            embed_dim=embed_dim * 4,
+            num_heads=num_heads,
+            window_size=window_size,
+            shift_size=shift_size,
+            in_channels=embed_dim * 2,
+            )
+        self.layer3 = TransformerBlock(
+            num_blocks=6,
+            image_resolution=self._get_new_shape(new_shape, stride=4),
+            embed_dim=embed_dim * 8,
+            num_heads=num_heads,
+            window_size=window_size,
+            shift_size=shift_size,
+            in_channels=embed_dim * 4,
+            )
+        # self.layer3 = SwinTransformerBlock(image_resolution=self._get_new_shape(new_shape, stirde=4))
+        # self.layer4 = SwinTransformerBlock(image_resolution=self._get_new_shape(new_shape, stride=8))
+
+    def forward(self, x):
+        x = self.patch_init(x)
+        if self._use_lpe:
+            x = x + self.pos_encoding
+
+        x = self.layer1(x)
+        x = self.layer2(x)
+        x = self.layer3(x)
+        return x
+
+    @staticmethod
+    def _get_new_shape(shape, stride):
+        return (shape[0] // stride, shape[1] // stride)
 
 
 if __name__ == "__main__":
-    block = TransformerBlock(num_blocks=6, window_size=7, embed_dim=768, num_heads=8, image_resolution=(28, 28), shift_size=3, in_channels=384, out_channels=768)
-    out = block(torch.rand(1, (28 * 28), 384))
+    model = SwinTransformer(7, (224, 224), 3, 96, 8, True)
+    out = model(torch.rand(1, 3, 224, 224))
     print(out.shape)
