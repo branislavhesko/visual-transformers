@@ -1,11 +1,8 @@
+from math import sqrt
 import torch
 import torch.nn as nn
 import einops
 from einops.layers.torch import Rearrange, Reduce
-
-
-class PositionalEncodingSinusoidal(torch.nn.Module):
-    pass
 
 
 class PatchEmbeddingPixelwise(torch.nn.Sequential):
@@ -44,6 +41,7 @@ class SwinMSA(nn.Module):
     def __init__(self, embed_dim, num_heads, window_size, attention_mask=None,
                  attention_dropout=0.0, projection_dropout=0.0):
         super(SwinMSA, self).__init__()
+        self.query_value = sqrt(32)
         self.embed_dim = embed_dim
         self.num_heads = num_heads
         self.window_size = window_size
@@ -96,6 +94,7 @@ class SwinMSA(nn.Module):
             energy_term = einops.rearrange(energy_term, "(b nw) h width height -> b nw h width height", nw=number_of_windows)
             energy_term = energy_term + self.attention_mask.unsqueeze(2).unsqueeze(0)
             energy_term = einops.rearrange(energy_term, "b nw h width height -> (b nw) h width height")
+        energy_term /= self.query_value
         energy_term = energy_term.softmax(dim=-1)
         out = torch.einsum('bihv, bvhd -> bihd ', energy_term, values)
         print(out.shape)
@@ -229,7 +228,7 @@ class SwinTransformerBlock(nn.Sequential):
                 window_size,
                 embed_dim,
                 num_heads,
-                (image_resolution[0] // 2, image_resolution[1] // 2),
+                (image_resolution[0], image_resolution[1]),
                 0,
                 attention_dropout,
                 projection_dropout
@@ -238,7 +237,7 @@ class SwinTransformerBlock(nn.Sequential):
                 window_size,
                 embed_dim,
                 num_heads,
-                (image_resolution[0] // 2, image_resolution[1] // 2),
+                (image_resolution[0], image_resolution[1]),
                 shift_size,
                 attention_dropout,
                 projection_dropout
@@ -249,9 +248,19 @@ class SwinTransformerBlock(nn.Sequential):
 class TransformerBlock(nn.Sequential):
 
     def __init__(self, num_blocks, window_size, embed_dim, num_heads, image_resolution, shift_size,
-                 in_channels,
+                 in_channels, use_patch_merging_layer=True,
                  attention_dropout=0.0, projection_dropout=0.0, dropout_rate_patch_merge=0.0):
 
+        if use_patch_merging_layer:
+            patch_merging_layer = [PatchMergingLayer(
+                      in_channels,
+                      embed_dim,
+                      image_resolution,
+                      dropout_rate=dropout_rate_patch_merge
+                ),]
+            image_resolution = image_resolution[0] // 2, image_resolution[1] // 2
+        else:
+            patch_merging_layer = []
         swin_transformer_blocks = [SwinTransformerBlock(
             window_size,
             embed_dim,
@@ -262,12 +271,7 @@ class TransformerBlock(nn.Sequential):
             projection_dropout,
             ) for _ in range(num_blocks)]
         # TODO: this is not desired for the first block!
-        blocks = [PatchMergingLayer(
-                      in_channels,
-                      embed_dim,
-                      image_resolution,
-                      dropout_rate=dropout_rate_patch_merge
-                ),] + swin_transformer_blocks
+        blocks = patch_merging_layer + swin_transformer_blocks
         super().__init__(*blocks)
 
 
@@ -280,7 +284,8 @@ class SwinTransformer(nn.Module):
             shift_size,
             embed_dim,
             num_heads,
-            use_linear_pos_encoding=False
+            use_linear_pos_encoding=False,
+            num_classes=2
             ):
         super().__init__()
         self.patch_init = PatchEmbeddingPixelwise(stride=4, embedding_size=embed_dim, channels=3)
@@ -293,14 +298,24 @@ class SwinTransformer(nn.Module):
         self.layer1 = TransformerBlock(
             num_blocks=2,
             image_resolution=new_shape,
+            embed_dim=embed_dim,
+            num_heads=num_heads,
+            window_size=window_size,
+            shift_size=shift_size,
+            in_channels=embed_dim,
+            use_patch_merging_layer=False
+            )
+        self.layer2 = TransformerBlock(
+            num_blocks=2,
+            image_resolution=self._get_new_shape(new_shape, stride=1),
             embed_dim=embed_dim * 2,
             num_heads=num_heads,
             window_size=window_size,
             shift_size=shift_size,
-            in_channels=embed_dim
+            in_channels=embed_dim,
             )
-        self.layer2 = TransformerBlock(
-            num_blocks=2,
+        self.layer3 = TransformerBlock(
+            num_blocks=6,
             image_resolution=self._get_new_shape(new_shape, stride=2),
             embed_dim=embed_dim * 4,
             num_heads=num_heads,
@@ -308,7 +323,7 @@ class SwinTransformer(nn.Module):
             shift_size=shift_size,
             in_channels=embed_dim * 2,
             )
-        self.layer3 = TransformerBlock(
+        self.layer4 = TransformerBlock(
             num_blocks=6,
             image_resolution=self._get_new_shape(new_shape, stride=4),
             embed_dim=embed_dim * 8,
@@ -317,8 +332,9 @@ class SwinTransformer(nn.Module):
             shift_size=shift_size,
             in_channels=embed_dim * 4,
             )
-        # self.layer3 = SwinTransformerBlock(image_resolution=self._get_new_shape(new_shape, stirde=4))
-        # self.layer4 = SwinTransformerBlock(image_resolution=self._get_new_shape(new_shape, stride=8))
+        self.head = nn.Linear(embed_dim * 8, num_classes)
+        self.norm = nn.LayerNorm(embed_dim * 8)
+        self.avg_pooling = nn.AdaptiveAvgPool1d(1)
 
     def forward(self, x):
         x = self.patch_init(x)
@@ -328,7 +344,10 @@ class SwinTransformer(nn.Module):
         x = self.layer1(x)
         x = self.layer2(x)
         x = self.layer3(x)
-        return x
+        x = self.layer4(x)
+        x = self.norm(x)
+        x = self.avg_pooling(x.transpose(1, 2)).squeeze()
+        return self.head(x)
 
     @staticmethod
     def _get_new_shape(shape, stride):
@@ -337,5 +356,5 @@ class SwinTransformer(nn.Module):
 
 if __name__ == "__main__":
     model = SwinTransformer(7, (224, 224), 3, 96, 8, True)
-    out = model(torch.rand(1, 3, 224, 224))
+    out = model(torch.rand(2, 3, 224, 224))
     print(out.shape)
