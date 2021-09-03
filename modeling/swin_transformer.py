@@ -346,8 +346,8 @@ class SwinTransformer(nn.Module):
         x = self.layer3(x)
         x = self.layer4(x)
         x = self.norm(x)
-        x = self.avg_pooling(x.transpose(1, 2)).squeeze()
-        return self.head(x)
+        x = self.avg_pooling(x.transpose(1, 2))
+        return self.head(x.flatten(1))
 
     @staticmethod
     def _get_new_shape(shape, stride):
