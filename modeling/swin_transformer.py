@@ -284,16 +284,16 @@ class SwinTransformer(nn.Module):
             img_shape,
             shift_size,
             embed_dim,
-            num_heads,
             block_numbers: Tuple[int] = (2, 2, 6, 2),
             use_linear_pos_encoding=False,
-            in_channels=3
+            in_channels=3,
+            query_size=32
             ):
         super().__init__()
         self.patch_init = PatchEmbeddingPixelwise(stride=4, embedding_size=embed_dim, channels=in_channels)
         self._use_lpe = use_linear_pos_encoding
         new_shape = self._get_new_shape(img_shape, 4)
-        num_elements = new_shape[0] * new_shape[1]
+        num_elements = int(new_shape[0] * new_shape[1])
 
         if self._use_lpe:
             self.pos_encoding = torch.nn.Parameter(torch.zeros(1, num_elements, embed_dim))
@@ -301,7 +301,7 @@ class SwinTransformer(nn.Module):
             num_blocks=block_numbers[0],
             image_resolution=new_shape,
             embed_dim=embed_dim,
-            num_heads=num_heads,
+            num_heads=embed_dim // query_size,
             window_size=window_size,
             shift_size=shift_size,
             in_channels=embed_dim,
@@ -311,7 +311,7 @@ class SwinTransformer(nn.Module):
             num_blocks=block_numbers[1],
             image_resolution=self._get_new_shape(new_shape, stride=1),
             embed_dim=embed_dim * 2,
-            num_heads=num_heads,
+            num_heads=embed_dim * 2 // query_size,
             window_size=window_size,
             shift_size=shift_size,
             in_channels=embed_dim,
@@ -320,7 +320,7 @@ class SwinTransformer(nn.Module):
             num_blocks=block_numbers[2],
             image_resolution=self._get_new_shape(new_shape, stride=2),
             embed_dim=embed_dim * 4,
-            num_heads=num_heads,
+            num_heads=embed_dim * 4 // query_size,
             window_size=window_size,
             shift_size=shift_size,
             in_channels=embed_dim * 2,
@@ -329,7 +329,7 @@ class SwinTransformer(nn.Module):
             num_blocks=block_numbers[2],
             image_resolution=self._get_new_shape(new_shape, stride=4),
             embed_dim=embed_dim * 8,
-            num_heads=num_heads,
+            num_heads=embed_dim * 8 // query_size,
             window_size=window_size,
             shift_size=shift_size,
             in_channels=embed_dim * 4,
@@ -357,6 +357,6 @@ class SwinTransformer(nn.Module):
 
 
 if __name__ == "__main__":
-    model = SwinTransformer(7, (224, 224), 3, 96, 8, True)
+    model = SwinTransformer(num_classes=2, window_size=7, img_shape=(224, 224), shift_size=3, embed_dim=96, use_linear_pos_encoding=False)
     out = model(torch.rand(2, 3, 224, 224))
     print(out.shape)
