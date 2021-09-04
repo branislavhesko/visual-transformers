@@ -1,4 +1,6 @@
 from math import sqrt
+from typing import List, Tuple
+
 import torch
 import torch.nn as nn
 import einops
@@ -79,7 +81,6 @@ class SwinMSA(nn.Module):
         Returns:
 
         """
-        print(x.shape)
         qkv = self.qkv(x)
         qkv = einops.rearrange(qkv, "b n (h d c) -> d b n h c", h=self.num_heads, d=3)
         queries, keys, values = qkv[0], qkv[1], qkv[2]
@@ -97,7 +98,6 @@ class SwinMSA(nn.Module):
         energy_term /= self.query_value
         energy_term = energy_term.softmax(dim=-1)
         out = torch.einsum('bihv, bvhd -> bihd ', energy_term, values)
-        print(out.shape)
         out = einops.rearrange(out, "b n h e -> b n (h e)")
         out = self.projection(out)
         return self.projection_dropout(out)
@@ -271,7 +271,7 @@ class TransformerBlock(nn.Sequential):
             projection_dropout,
             ) for _ in range(num_blocks)]
         # TODO: this is not desired for the first block!
-        blocks = patch_merging_layer + swin_transformer_blocks
+        blocks: List[nn.Module] = patch_merging_layer + swin_transformer_blocks
         super().__init__(*blocks)
 
 
@@ -279,16 +279,18 @@ class SwinTransformer(nn.Module):
 
     def __init__(
             self,
+            num_classes,
             window_size,
             img_shape,
             shift_size,
             embed_dim,
             num_heads,
+            block_numbers: Tuple[int] = (2, 2, 6, 2),
             use_linear_pos_encoding=False,
-            num_classes=2
+            in_channels=3
             ):
         super().__init__()
-        self.patch_init = PatchEmbeddingPixelwise(stride=4, embedding_size=embed_dim, channels=3)
+        self.patch_init = PatchEmbeddingPixelwise(stride=4, embedding_size=embed_dim, channels=in_channels)
         self._use_lpe = use_linear_pos_encoding
         new_shape = self._get_new_shape(img_shape, 4)
         num_elements = new_shape[0] * new_shape[1]
@@ -296,7 +298,7 @@ class SwinTransformer(nn.Module):
         if self._use_lpe:
             self.pos_encoding = torch.nn.Parameter(torch.zeros(1, num_elements, embed_dim))
         self.layer1 = TransformerBlock(
-            num_blocks=2,
+            num_blocks=block_numbers[0],
             image_resolution=new_shape,
             embed_dim=embed_dim,
             num_heads=num_heads,
@@ -306,7 +308,7 @@ class SwinTransformer(nn.Module):
             use_patch_merging_layer=False
             )
         self.layer2 = TransformerBlock(
-            num_blocks=2,
+            num_blocks=block_numbers[1],
             image_resolution=self._get_new_shape(new_shape, stride=1),
             embed_dim=embed_dim * 2,
             num_heads=num_heads,
@@ -315,7 +317,7 @@ class SwinTransformer(nn.Module):
             in_channels=embed_dim,
             )
         self.layer3 = TransformerBlock(
-            num_blocks=6,
+            num_blocks=block_numbers[2],
             image_resolution=self._get_new_shape(new_shape, stride=2),
             embed_dim=embed_dim * 4,
             num_heads=num_heads,
@@ -324,7 +326,7 @@ class SwinTransformer(nn.Module):
             in_channels=embed_dim * 2,
             )
         self.layer4 = TransformerBlock(
-            num_blocks=6,
+            num_blocks=block_numbers[2],
             image_resolution=self._get_new_shape(new_shape, stride=4),
             embed_dim=embed_dim * 8,
             num_heads=num_heads,
@@ -351,7 +353,7 @@ class SwinTransformer(nn.Module):
 
     @staticmethod
     def _get_new_shape(shape, stride):
-        return (shape[0] // stride, shape[1] // stride)
+        return shape[0] // stride, shape[1] // stride
 
 
 if __name__ == "__main__":
