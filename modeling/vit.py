@@ -28,7 +28,8 @@ class PatchEmbedding(torch.nn.Module):
 class PositionEmbedding(torch.nn.Module):
     def __init__(self, image_shape, patch_size, embed_size):
         super().__init__()
-        self._position = nn.Parameter(torch.randn(int((image_shape // patch_size) ** 2 + 1), embed_size))
+        num_patches = (image_shape[0] // patch_size) * (image_shape[1] // patch_size) + 1
+        self._position = nn.Parameter(torch.randn(int(num_patches), embed_size))
 
     def forward(self, x):
         position = einops.repeat(self._position, "n e -> b n e", b=x.shape[0])
@@ -119,7 +120,7 @@ class VIT(torch.nn.Module):
                  num_heads, image_shape, patch_size, store_attention):
         super().__init__()
         self.attention_store = [] if store_attention else None
-        self.patch_embed = PatchEmbedding(in_channels=in_channels, embed_size=embed_size, patch_size=patch_size     )
+        self.patch_embed = PatchEmbedding(in_channels=in_channels, embed_size=embed_size, patch_size=patch_size)
         self.position_embed = PositionEmbedding(embed_size=embed_size, image_shape=image_shape, patch_size=patch_size)
         self.encoder = TransformerEncoder(num_layers=num_layers, embed_size=embed_size,
                                           num_heads=num_heads, attention_store=self.attention_store)
@@ -138,6 +139,6 @@ class VIT(torch.nn.Module):
 
 
 if __name__ == "__main__":
-    model = VIT(3, 768, 2, 6, 8, 224, 16, store_attention=False)
+    model = VIT(3, 768, 2, 6, 8, (224, 224), 16, store_attention=False)
     out = model(torch.rand(2, 3, 224, 224))
     print(out.shape)

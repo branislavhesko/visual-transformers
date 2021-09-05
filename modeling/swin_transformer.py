@@ -191,15 +191,15 @@ class SingleSwinBlock(nn.Module):
         msa_out = x + msa_out
         return msa_out + self.mlp(msa_out)
 
+
 class PatchMergingLayer(nn.Module):
 
-    def __init__(self, in_channels, out_channels, image_resolution, dropout_rate=0.1):
+    def __init__(self, in_channels, out_channels, image_resolution, patch_merging_dropout=0.1):
         super().__init__()
-        self.merging_dropout = nn.Dropout(dropout_rate)
+        self.merging_dropout = nn.Dropout(patch_merging_dropout)
         self.linear = nn.Linear(in_channels * 4, out_channels)
         self.norm = nn.LayerNorm(out_channels)
         self.image_resolution = image_resolution
-
 
     def forward(self, x):
         h, w = self.image_resolution
@@ -249,14 +249,14 @@ class TransformerBlock(nn.Sequential):
 
     def __init__(self, num_blocks, window_size, embed_dim, num_heads, image_resolution, shift_size,
                  in_channels, use_patch_merging_layer=True,
-                 attention_dropout=0.0, projection_dropout=0.0, dropout_rate_patch_merge=0.0):
+                 attention_dropout=0.0, projection_dropout=0.0, patch_merging_dropout=0.0):
 
         if use_patch_merging_layer:
             patch_merging_layer = [PatchMergingLayer(
                       in_channels,
                       embed_dim,
                       image_resolution,
-                      dropout_rate=dropout_rate_patch_merge
+                      patch_merging_dropout=patch_merging_dropout
                 ),]
             image_resolution = image_resolution[0] // 2, image_resolution[1] // 2
         else:
@@ -287,7 +287,10 @@ class SwinTransformer(nn.Module):
             block_numbers: Tuple[int] = (2, 2, 6, 2),
             use_linear_pos_encoding=False,
             in_channels=3,
-            query_size=32
+            query_size=32,
+            attention_dropout=0.2,
+            projection_dropout=0.2,
+            patch_merging_dropout=0.1
             ):
         super().__init__()
         self.patch_init = PatchEmbeddingPixelwise(stride=4, embedding_size=embed_dim, channels=in_channels)
@@ -305,7 +308,10 @@ class SwinTransformer(nn.Module):
             window_size=window_size,
             shift_size=shift_size,
             in_channels=embed_dim,
-            use_patch_merging_layer=False
+            use_patch_merging_layer=False,
+            projection_dropout=projection_dropout,
+            attention_dropout=attention_dropout,
+            patch_merging_dropout=patch_merging_dropout
             )
         self.layer2 = TransformerBlock(
             num_blocks=block_numbers[1],
@@ -315,6 +321,9 @@ class SwinTransformer(nn.Module):
             window_size=window_size,
             shift_size=shift_size,
             in_channels=embed_dim,
+            projection_dropout=projection_dropout,
+            attention_dropout=attention_dropout,
+            patch_merging_dropout=patch_merging_dropout
             )
         self.layer3 = TransformerBlock(
             num_blocks=block_numbers[2],
@@ -324,6 +333,9 @@ class SwinTransformer(nn.Module):
             window_size=window_size,
             shift_size=shift_size,
             in_channels=embed_dim * 2,
+            projection_dropout=projection_dropout,
+            attention_dropout=attention_dropout,
+            patch_merging_dropout=patch_merging_dropout
             )
         self.layer4 = TransformerBlock(
             num_blocks=block_numbers[2],
@@ -333,6 +345,9 @@ class SwinTransformer(nn.Module):
             window_size=window_size,
             shift_size=shift_size,
             in_channels=embed_dim * 4,
+            projection_dropout=projection_dropout,
+            attention_dropout=attention_dropout,
+            patch_merging_dropout=patch_merging_dropout
             )
         self.head = nn.Linear(embed_dim * 8, num_classes)
         self.norm = nn.LayerNorm(embed_dim * 8)

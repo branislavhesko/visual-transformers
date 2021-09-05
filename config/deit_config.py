@@ -1,8 +1,8 @@
-from config.vit_config import VITConfig
+from config.classification_config import ClassificationConfig
 from modeling.vit import VIT
 
 
-class DeITConfig(VITConfig):
+class DeITConfig(ClassificationConfig):
 
     checkpoint_path = "./ckpt/checkpoint.pt"
 

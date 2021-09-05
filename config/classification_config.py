@@ -6,14 +6,7 @@ import torchvision
 from config.data_mode import Mode
 
 
-class VITConfig:
-    num_heads = 16
-    in_channels = 3
-    embed_size = 1024
-    num_classes = 4
-    num_layers = 6
-    image_shape = 224
-    patch_size = 32
+class ClassificationConfig:
     num_epochs = 21
     lr = 5e-3
 

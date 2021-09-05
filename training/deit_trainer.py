@@ -4,7 +4,7 @@ import torch.utils.tensorboard as tb
 import tqdm
 
 from config.deit_config import DeITConfig
-from config.vit_config import VITConfig
+from config.classification_config import ClassificationConfig
 from config.data_mode import Mode
 from dataset.classification_dataset import get_data_loaders
 from modeling.deit import DeIT, get_auxiliary_model
