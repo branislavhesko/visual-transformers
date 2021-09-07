@@ -8,8 +8,8 @@ from config.data_mode import Mode
 
 class ClassificationConfig:
     num_epochs = 21
-    lr = 5e-3
-
+    lr = 1e-3
+    num_classes = 4
     validation_frequency = 2
     batch_size = 12
     num_workers = 8
