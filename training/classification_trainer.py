@@ -9,6 +9,7 @@ from model_config import swin_small_window_7_embed_96
 from swin import SwinTransformer
 
 
+
 class Trainer:
 
     def __init__(self, config: ClassificationConfig):
