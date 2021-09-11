@@ -82,7 +82,7 @@ class SwinMSA(nn.Module):
 
         """
         qkv = self.qkv(x)
-        qkv = einops.rearrange(qkv, "b n (h d c) -> d b n h c", h=self.num_heads, d=3)
+        qkv = einops.rearrange(qkv, "b n (d h c) -> d b n h c", h=self.num_heads, d=3)
         queries, keys, values = qkv[0], qkv[1], qkv[2]
         energy_term = torch.einsum("bqhe, bkhe -> bqhk", queries, keys)
         energy_term *= self.scale
@@ -288,9 +288,9 @@ class SwinTransformer(nn.Module):
             use_linear_pos_encoding=False,
             in_channels=3,
             query_size=32,
-            attention_dropout=0.2,
-            projection_dropout=0.2,
-            patch_merging_dropout=0.1
+            attention_dropout=0.0,
+            projection_dropout=0.0,
+            patch_merging_dropout=0.0
             ):
         super().__init__()
         self.patch_init = PatchEmbeddingPixelwise(stride=4, embedding_size=embed_dim, channels=in_channels)

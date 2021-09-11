@@ -8,11 +8,11 @@ from config.data_mode import Mode
 
 class ClassificationConfig:
     num_epochs = 21
-    lr = 5e-3
-
+    lr = 1e-4
+    num_classes = 4
     validation_frequency = 2
     batch_size = 12
-    num_workers = 8
+    num_workers = 6
     device = "cuda" if torch.cuda.is_available() and torch.cuda.get_device_properties(
         torch.cuda.current_device()).total_memory > 4e9 else "cpu"
     path = {
